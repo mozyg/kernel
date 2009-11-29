@@ -61,6 +61,8 @@ static const char driver_desc [] = COMPOSITE_DESC;
 
 /* descriptors that are built on-demand */
 static char serial_number [64] = {"0"};
+static char manufacturer [64] = {"Palm Inc."};
+static char product_name [64] = {"Pre"};
 
 #define DEFAULT_VENDOR_ID	0x0830 /* Palm, Inc. */
 
@@ -89,8 +91,8 @@ static unsigned int product = DEFAULT_PRODUCT_ID; /* module parm */
 /* USB Strings, UTF8 */
 
 static struct usb_string composite_strings[] = {
-	{ COMPOSITE_MANUFACTURER_ID, "Palm Inc." },
-	{ COMPOSITE_PRODUCT_ID, "Pre"},
+	{ COMPOSITE_MANUFACTURER_ID, manufacturer },
+	{ COMPOSITE_PRODUCT_ID, product_name },
 	{ COMPOSITE_SERIALNUMBER_ID, serial_number },
 	{ COMPOSITE_CONFIG_500MA_ID, "Composite 500mA" },
 	{ COMPOSITE_CONFIG_100MA_ID, "Composite 100mA" },
@@ -220,8 +222,15 @@ static ssize_t show_serial_number(struct device *dev, struct device_attribute *a
 
 static ssize_t store_serial_number(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
 {
-	if (sscanf(buf, "%64s", (char*)&serial_number) != 1)
+	int len = count;
+
+	if (buf[len-1] == '\n')
+		--len;
+	if (len >= 64)
 		return -EINVAL;
+	memcpy(serial_number, buf, len);
+	serial_number[len] = '\0';
+
 	parameter_update();
 	return count;
 }
@@ -235,6 +244,46 @@ static ssize_t store_composite_version_num(struct device *dev, struct device_att
 {
 	if (sscanf(buf, "%x", &composite_version_num) != 1)
 		return -EINVAL;
+	parameter_update();
+	return count;
+}
+
+static ssize_t show_manufacturer(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%s\n", manufacturer);
+}
+
+static ssize_t store_manufacturer(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
+{
+	int len = count;
+
+	if (buf[len-1] == '\n')
+		--len;
+	if (len >= 64)
+		return -EINVAL;
+	memcpy(manufacturer, buf, len);
+	manufacturer[len] = '\0';
+
+	parameter_update();
+	return count;
+}
+
+static ssize_t show_product_name(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%s\n", product_name);
+}
+
+static ssize_t store_product_name(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
+{
+	int len = count;
+
+	if (buf[len-1] == '\n')
+		--len;
+	if (len >= 64)
+		return -EINVAL;
+	memcpy(product_name, buf, len);
+	product_name[len] = '\0';
+
 	parameter_update();
 	return count;
 }
@@ -259,6 +308,8 @@ static DEVICE_ATTR(product_id, 0644, show_product_id, store_product_id);
 static DEVICE_ATTR(vendor_id, 0644, show_vendor_id, store_vendor_id);
 static DEVICE_ATTR(composite_version_num, 0644, show_composite_version_num, store_composite_version_num);
 static DEVICE_ATTR(serial_number, 0644, show_serial_number, store_serial_number);
+static DEVICE_ATTR(manufacturer, 0644, show_manufacturer, store_manufacturer);
+static DEVICE_ATTR(product_name, 0644, show_product_name, store_product_name);
 static DEVICE_ATTR(dump, 0644, show_dump, store_dump);
 
 
@@ -779,6 +830,8 @@ composite_unbind(struct usb_gadget *gadget)
 	device_remove_file(&gadget->dev, &dev_attr_vendor_id);
 	device_remove_file(&gadget->dev, &dev_attr_composite_version_num);
 	device_remove_file(&gadget->dev, &dev_attr_serial_number);
+	device_remove_file(&gadget->dev, &dev_attr_manufacturer);
+	device_remove_file(&gadget->dev, &dev_attr_product_name);
 	device_remove_file(&gadget->dev, &dev_attr_dump);
 
 	list_for_each_entry (f, &cdev->driver->functions, function) {
@@ -894,6 +947,10 @@ composite_bind(struct usb_gadget *gadget)
 							&dev_attr_composite_version_num)) != 0 ||
 		(status = device_create_file(&gadget->dev,
 							&dev_attr_serial_number)) != 0 ||
+		(status = device_create_file(&gadget->dev,
+							&dev_attr_manufacturer)) != 0 ||
+		(status = device_create_file(&gadget->dev,
+							&dev_attr_product_name)) != 0 ||
 		(status = device_create_file(&gadget->dev, &dev_attr_dump)) != 0) {
 
 		printk(KERN_ERR "%s could not register devattrs.\n",
