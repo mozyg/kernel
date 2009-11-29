@@ -2,8 +2,8 @@
  * linux/arch/arm/mach-omap3pe/mux.c
  *
  * Copyright (C) 2008-2009 Palm, Inc.
- * 
- * Based on   
+ *
+ * Based on
  *
  * OMAP2 and OMAP3 pin multiplexing configurations
  *

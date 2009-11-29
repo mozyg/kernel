@@ -112,7 +112,7 @@ asmlinkage void __exception asm_do_IRQ(unsigned int irq, struct pt_regs *regs)
 {
 	struct pt_regs *old_regs = set_irq_regs(regs);
 	struct irq_desc *desc = irq_desc + irq;
-	static int last_irq  = 0; 
+	static int last_irq  = 0;
 
 	/*
 	 * Some hardware gives randomly wrong interrupts.  Rather

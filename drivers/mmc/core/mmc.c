@@ -255,6 +255,52 @@ out:
 }
 
 /*
+ * Wait for the card to exit the busy state
+ */
+static int mmc_wait_not_busy(struct mmc_card *card,u32 retries, u32 retry_polling_ms)
+{
+	u32 status = 0;
+	int err = -ETIMEDOUT;
+
+	for(;retries > 0; retries--) {
+		err = mmc_send_status(card, &status);
+		
+		if (err)
+			goto err;
+
+		if ( status & R1_READY_FOR_DATA ) 
+			break;
+		
+		msleep(retry_polling_ms);
+	}
+
+	if ( !retries ) {
+		err = -ETIMEDOUT;
+	}	
+err:
+	return err;
+}
+
+/*
+ * Execute switch cmd and wait for the card to exit the busy state
+ */
+static int mmc_execute_switch(struct mmc_card *card, u8 set, u8 index, u8 value)
+{
+	int err;
+
+	err = mmc_switch(card, set, index, value);
+
+	if (err)
+		goto err;
+
+	//:TODO: Replace the magic numbers with defines
+	err = mmc_wait_not_busy(card, 30 , 5);
+err :
+
+	return err;
+}
+
+/*
  * Handle the detection and initialisation of a card.
  *
  * In the case of a resume, "curcard" will contain the card
@@ -376,7 +422,7 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 	 */
 	if ((card->ext_csd.hs_max_dtr != 0) &&
 		(host->caps & MMC_CAP_MMC_HIGHSPEED)) {
-		err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL,
+		err = mmc_execute_switch(card, EXT_CSD_CMD_SET_NORMAL,
 			EXT_CSD_HS_TIMING, 1);
 		if (err)
 			goto free_card;
@@ -413,14 +459,14 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 	 */
 	if ((card->csd.mmca_vsn >= CSD_SPEC_VER_4) &&
 		(host->caps & MMC_CAP_8_BIT_DATA)) {
-		err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL,
+		err = mmc_execute_switch(card, EXT_CSD_CMD_SET_NORMAL,
 			EXT_CSD_BUS_WIDTH, EXT_CSD_BUS_WIDTH_8);
 		if (err)
 			goto free_card;
 		mmc_set_bus_width(card->host, MMC_BUS_WIDTH_8);
 	} else if ((card->csd.mmca_vsn >= CSD_SPEC_VER_4) &&
 		(host->caps & MMC_CAP_4_BIT_DATA)) {
-		err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL,
+		err = mmc_execute_switch(card, EXT_CSD_CMD_SET_NORMAL,
 			EXT_CSD_BUS_WIDTH, EXT_CSD_BUS_WIDTH_4);
 		if (err)
 			goto free_card;

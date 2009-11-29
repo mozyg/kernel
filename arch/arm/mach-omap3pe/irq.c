@@ -2,7 +2,7 @@
  * linux/arch/arm/mach-omap3pe/irq.c
  *
  * Copyright (C) 2008-2009 Palm, Inc.
- * 
+ *
  * Based on Interrupt handler for OMAP2 boards.
  *
  * Copyright (C) 2005 Nokia Corporation

@@ -72,6 +72,7 @@ static char serial_number [64] = {"0"};
 #error "unknown machine type"
 #endif
 
+static unsigned int composite_version_num = COMPOSITE_VERSION_NUM;
 static unsigned int vendor = DEFAULT_VENDOR_ID; /* module parm */
 static unsigned int product = DEFAULT_PRODUCT_ID; /* module parm */
 
@@ -149,6 +150,117 @@ static struct usb_composite_driver composite_drv = {
 	.strings		= &composite_stringtable,
 	.functions		= LIST_HEAD_INIT(composite_drv.functions),
 };
+
+static struct usb_composite_dev	*the_cdev = NULL;
+
+/*-------------------------------------------------------------------------*/
+
+static void parameter_update(void)
+{
+	struct usb_composite_driver *d = &composite_drv;
+	struct usb_composite_dev	*cdev = the_cdev;
+	int gcnum;
+
+	d->vendor_id = vendor;
+	d->product_id = product;
+
+	composite_device_desc.idVendor = cpu_to_le16(d->vendor_id);
+	composite_device_desc.idProduct = cpu_to_le16(d->product_id);
+
+	cdev->dev.idVendor = cpu_to_le16(d->vendor_id);
+	cdev->dev.idProduct = cpu_to_le16(d->product_id);
+
+	gcnum = usb_gadget_controller_number(cdev->gadget);
+	/* FIXME */
+	if (gcnum >= 0)
+		cdev->dev.bcdDevice =
+				cpu_to_le16(composite_version_num| gcnum);
+	else {
+		dprintk("controller '%s' not recognized\n", cdev->gadget->name);
+		/* unrecognized, but safe unless bulk is REALLY quirky */
+		cdev->dev.bcdDevice =
+			__constant_cpu_to_le16(composite_version_num|0x0099);
+	}
+}
+
+static ssize_t show_product_id(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%x\n", product);
+}
+
+static ssize_t store_product_id(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
+{
+	int product_id;
+	if (sscanf(buf, "%x", &product_id) != 1)
+		return -EINVAL;
+	product = product_id;	
+	parameter_update();
+	return count;
+}
+
+static ssize_t show_vendor_id(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%x\n", vendor);
+}
+
+static ssize_t store_vendor_id(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
+{
+	int vendor_id;
+	if (sscanf(buf, "%x", &vendor_id) != 1)
+		return -EINVAL;
+	vendor = vendor_id;	
+	parameter_update();
+	return count;
+}
+
+static ssize_t show_serial_number(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%s\n", serial_number);
+}
+
+static ssize_t store_serial_number(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
+{
+	if (sscanf(buf, "%64s", (char*)&serial_number) != 1)
+		return -EINVAL;
+	parameter_update();
+	return count;
+}
+
+static ssize_t show_composite_version_num(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%x\n", composite_version_num);
+}
+
+static ssize_t store_composite_version_num(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
+{
+	if (sscanf(buf, "%x", &composite_version_num) != 1)
+		return -EINVAL;
+	parameter_update();
+	return count;
+}
+
+static ssize_t show_dump(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	int len = 0;
+	len += sprintf(buf+len, "Vendor ID %x\n", composite_device_desc.idVendor);
+	len += sprintf(buf+len, "Product ID %x\n", composite_device_desc.idProduct);
+	len += sprintf(buf+len, "CDEV Vendor ID %x\n", the_cdev->dev.idVendor);
+	len += sprintf(buf+len, "CDEV Product ID %x\n", the_cdev->dev.idProduct);
+
+	return len;
+}
+
+static ssize_t store_dump(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
+{
+	return count;
+}
+
+static DEVICE_ATTR(product_id, 0644, show_product_id, store_product_id);
+static DEVICE_ATTR(vendor_id, 0644, show_vendor_id, store_vendor_id);
+static DEVICE_ATTR(composite_version_num, 0644, show_composite_version_num, store_composite_version_num);
+static DEVICE_ATTR(serial_number, 0644, show_serial_number, store_serial_number);
+static DEVICE_ATTR(dump, 0644, show_dump, store_dump);
+
 
 /*-------------------------------------------------------------------------*/
 /*
@@ -663,6 +775,12 @@ composite_unbind(struct usb_gadget *gadget)
 
 	dprintk("enter\n");
 
+	device_remove_file(&gadget->dev, &dev_attr_product_id);
+	device_remove_file(&gadget->dev, &dev_attr_vendor_id);
+	device_remove_file(&gadget->dev, &dev_attr_composite_version_num);
+	device_remove_file(&gadget->dev, &dev_attr_serial_number);
+	device_remove_file(&gadget->dev, &dev_attr_dump);
+
 	list_for_each_entry (f, &cdev->driver->functions, function) {
 		cdev->current_func = f;
 		if (f->unbind)
@@ -725,12 +843,12 @@ composite_bind(struct usb_gadget *gadget)
 	/* FIXME */
 	if (gcnum >= 0)
 		cdev->dev.bcdDevice =
-				cpu_to_le16(COMPOSITE_VERSION_NUM | gcnum);
+				cpu_to_le16(composite_version_num| gcnum);
 	else {
 		dprintk("controller '%s' not recognized\n", gadget->name);
 		/* unrecognized, but safe unless bulk is REALLY quirky */
 		cdev->dev.bcdDevice =
-			__constant_cpu_to_le16(COMPOSITE_VERSION_NUM|0x0099);
+			__constant_cpu_to_le16(composite_version_num|0x0099);
 	}
 
 	/* REVISIT Code from serial gadget? */
@@ -767,6 +885,23 @@ composite_bind(struct usb_gadget *gadget)
 
 		cdev->qual.bNumConfigurations = cdev->dev.bNumConfigurations;
 	}
+
+	if ((status = device_create_file(&gadget->dev,
+							&dev_attr_product_id)) != 0 ||
+		(status = device_create_file(&gadget->dev,
+							&dev_attr_vendor_id)) != 0 ||
+		(status = device_create_file(&gadget->dev,
+							&dev_attr_composite_version_num)) != 0 ||
+		(status = device_create_file(&gadget->dev,
+							&dev_attr_serial_number)) != 0 ||
+		(status = device_create_file(&gadget->dev, &dev_attr_dump)) != 0) {
+
+		printk(KERN_ERR "%s could not register devattrs.\n",
+					cdev->driver->name);
+		goto fail;
+	}
+
+	the_cdev = cdev;
 
 	printk(KERN_INFO "%s ready\n", cdev->driver->name);
 	return 0;
@@ -1001,6 +1136,7 @@ static int composite_init(void)
 		       __FUNCTION__);
 		goto fail;
 	}
+
 	return 0;
 
 fail:

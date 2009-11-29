@@ -2,7 +2,7 @@
  * linux/arch/arm/mach-omap3pe/constraint.c
  *
  * Copyright (C) 2008-2009 Palm, Inc.
- * 
+ *
  * Based on resource framework by
  *
  * Copyright (C) 2006-2007 Texas Instruments, Inc.

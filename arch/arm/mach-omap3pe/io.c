@@ -2,7 +2,7 @@
  * linux/arch/arm/mach-omap3pe/io.c
  *
  * Copyright (C) 2008-2009 Palm, Inc.
- * 
+ *
  * Based on OMAP2/3 I/O mapping code
  *
  * Copyright (C) 2005 Nokia Corporation

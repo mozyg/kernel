@@ -7,7 +7,7 @@
  * Copyright (c) 2000 Vojtech Pavlik	<vojtech@suse.cz>
  * Copyright (c) 2004 Oliver Neukum	<oliver@neukum.name>
  * Copyright (c) 2005 David Kubicek	<dave@awk.cz>
- * Copyright (c) 2008-2009 Palm, Inc. 
+ * Copyright (c) 2008-2009 Palm, Inc.
  *
  * USB Abstract Control Model driver for USB modems and ISDN adapters
  *
@@ -221,6 +221,12 @@ static int acm_wb_alloc(struct acm *acm)
 		wb = &acm->wb[wbn];
 		if (!wb->use) {
 			wb->use = 1;
+			wb->started = 0;
+			wb->t_alloc = jiffies;
+			wb->t_delayed = 0;
+			wb->t_start = 0;
+			wb->t_done = 0;
+			wb->t_killed = 0;
 			return wbn;
 		}
 		wbn = (wbn + 1) % ACM_NW;
@@ -249,6 +255,7 @@ static int acm_wb_is_avail(struct acm *acm)
 static void acm_write_done(struct acm *acm, struct acm_wb *wb)
 {
 	wb->use = 0;
+	wb->t_done = jiffies;
 	acm->transmitting--;
 }
 
@@ -263,6 +270,8 @@ static int acm_start_wb(struct acm *acm, struct acm_wb *wb)
 	int rc;
 
 	acm->transmitting++;
+	wb->started = 1;
+	wb->t_start = jiffies;
 
 	wb->urb->transfer_buffer = wb->buf;
 	wb->urb->transfer_dma = wb->dmah;
@@ -270,7 +279,7 @@ static int acm_start_wb(struct acm *acm, struct acm_wb *wb)
 	wb->urb->dev = acm->dev;
 
 	if ((rc = usb_submit_urb(wb->urb, GFP_ATOMIC)) < 0) {
-		dev_err(&acm->data->dev, "usb_submit_urb(write bulk) failed: %d", rc);
+		dev_err(&acm->data->dev, "usb_submit_urb(write bulk) failed: %d\n", rc);
 		acm_write_done(acm, wb);
 	}
 	return rc;
@@ -299,6 +308,7 @@ static int acm_write_start(struct acm *acm, int wbn)
 	if (acm->susp_count || !list_empty(&acm->delayed_wb_list)) {
 //		printk(KERN_DEBUG "%s: delayed wbn=%d (wb=%p)\n",
 //		__func__, wbn, wb);
+		wb->t_delayed = jiffies;
 		list_add_tail(&wb->list, &acm->delayed_wb_list);
 		queue_work(acm_workq, &acm->waker);
 		spin_unlock_irqrestore(&acm->write_lock, flags);
@@ -387,6 +397,65 @@ end:
 }
 
 static DEVICE_ATTR(passthru, S_IRUGO|S_IWUGO, show_passthru, store_passthru);
+
+static ssize_t show_wbs
+(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct usb_interface *intf = to_usb_interface(dev);
+	struct acm *acm = usb_get_intfdata(intf);
+	int count = 0;
+	int i;
+	unsigned long flags;
+
+	spin_lock_irqsave(&acm->write_lock, flags);
+
+	for (i = 0; i < ACM_NW; i++) {
+		struct acm_wb *wb = &acm->wb[i];
+
+		count += snprintf(buf + count, PAGE_SIZE - count,
+			  "wb%02d: use=%d %010lu:%010lu:%010lu:%010lu:%010lu len=%d\n",
+				  i, wb->use, wb->t_alloc, wb->t_delayed,
+				  wb->t_start, wb->t_done, wb->t_killed, wb->len);
+	}
+
+	count += snprintf(buf + count, PAGE_SIZE - count,
+			  "transmit=%d\n", acm->transmitting);
+
+	spin_unlock_irqrestore(&acm->write_lock, flags);
+
+	return count;
+}
+
+static ssize_t store_wbs
+(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct usb_interface *intf = to_usb_interface(dev);
+	struct acm *acm = usb_get_intfdata(intf);
+        ssize_t rc = count;
+	int i;
+	unsigned long flags;
+
+	dev_info(&acm->data->dev, "Cancel wbs\n");
+
+	spin_lock_irqsave(&acm->write_lock, flags);
+
+	for (i = 0; i < ACM_NW; i++) {
+		struct acm_wb *wb = &acm->wb[i];
+
+		usb_kill_urb(wb->urb);
+		/* if the write is not started,
+		   we need to drop use flag explicity */
+		if (!wb->started)
+			wb->use = 0;
+		wb->t_killed = jiffies;
+	}
+
+	spin_unlock_irqrestore(&acm->write_lock, flags);
+
+        return rc;
+}
+
+static DEVICE_ATTR(wbs, S_IRUGO|S_IWUGO, show_wbs, store_wbs);
 /*
  * Interrupt handlers for various ACM device responses
  */
@@ -880,6 +949,7 @@ static void acm_tty_close(struct tty_struct *tty, struct file *filp)
 	struct acm *acm = tty->driver_data;
 	int i,nr;
 	int rv;
+	int autopm_fail = 0;
 
 	if (!acm || !acm->used)
 		return;
@@ -894,6 +964,7 @@ static void acm_tty_close(struct tty_struct *tty, struct file *filp)
 			rv = usb_autopm_get_interface(acm->control);
 			if (rv < 0) {
 				printk("Autopm failure in %s (rv=%d)\n", __func__, rv);
+				autopm_fail++;
 				if (!acm->dev)
 					goto retry;
 			}
@@ -911,12 +982,19 @@ static void acm_tty_close(struct tty_struct *tty, struct file *filp)
 			
 			if (acm->ctrlurb)
 				usb_kill_urb(acm->ctrlurb);
-			for (i = 0; i < ACM_NW; i++)
+			for (i = 0; i < ACM_NW; i++) {
 				usb_kill_urb(acm->wb[i].urb);
+				/* if the write is not started,
+				   we need to drop use flag explicity */
+				if (!acm->wb[i].started)
+					acm->wb[i].use = 0;
+				acm->wb[i].t_killed = jiffies;
+			}
 			for (i = 0; i < nr; i++)
 				usb_kill_urb(acm->ru[i].urb);
 			acm->control->needs_remote_wakeup = 0;
-			usb_autopm_put_interface(acm->control);
+			if (autopm_fail == 0)
+				usb_autopm_put_interface(acm->control);
 		} else
 			acm_free(acm); /* tty is already unregistered */
 	}
@@ -1608,7 +1686,10 @@ skip_no_separate_data:
 		goto alloc_fail8;
 	i = device_create_file(&intf->dev, &dev_attr_passthru);
 	if (i < 0)
-		goto alloc_fail8;
+		goto alloc_fail9;
+	i = device_create_file(&intf->dev, &dev_attr_wbs);
+	if (i < 0)
+		goto alloc_fail10;
 
 	if (cfd) { /* export the country data */
 		acm->country_codes = kmalloc(cfd->bLength - 4, GFP_KERNEL);
@@ -1665,6 +1746,10 @@ skip_countries:
 #endif
 
 	return 0;
+alloc_fail10:
+	device_remove_file(&acm->control->dev, &dev_attr_passthru);
+alloc_fail9:
+	device_remove_file(&acm->control->dev, &dev_attr_bmCapabilities);
 alloc_fail8:
 	for (i = 0; i < ACM_NW; i++)
 		usb_free_urb(acm->wb[i].urb);
@@ -1695,8 +1780,16 @@ static void stop_data_traffic(struct acm *acm, int disconnected)
 	if (acm->ctrlurb) {
 		usb_kill_urb(acm->ctrlurb);
 	}
-	for(i = 0; i < ACM_NW; i++)
+	for(i = 0; i < ACM_NW; i++) {
 		usb_kill_urb(acm->wb[i].urb);
+		if (disconnected) {
+			/* if the write is not started,
+			   we need to drop use flag explicity */
+			if (!acm->wb[i].started)
+				acm->wb[i].use = 0;
+		}
+		acm->wb[i].t_killed = jiffies;
+	}
 	for (i = 0; i < acm->rx_buflimit; i++)
 		usb_kill_urb(acm->ru[i].urb);
 
@@ -1729,6 +1822,7 @@ static void acm_disconnect(struct usb_interface *intf)
 	}
 	device_remove_file(&acm->control->dev, &dev_attr_bmCapabilities);
 	device_remove_file(&acm->control->dev, &dev_attr_passthru);
+	device_remove_file(&acm->control->dev, &dev_attr_wbs);
 	acm->dev = NULL;
 	usb_set_intfdata(acm->control, NULL);
 	if (acm->control != acm->data)

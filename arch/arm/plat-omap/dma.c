@@ -1090,13 +1090,13 @@ static void create_dma_lch_chain(int lch_head, int lch_queue)
 	}
 
 	w = OMAP_DMA_CLNK_CTRL_REG(lch_head);
-	// OMAP2/3 has 32 dma channels  
+	// OMAP2/3 has 32 dma channels
 	w &= ~(0x01f);
 	w |= lch_queue ;
 	OMAP_DMA_CLNK_CTRL_REG(lch_head) = w;
 
 	w = OMAP_DMA_CLNK_CTRL_REG(lch_queue);
-	// OMAP2/3 has 32 dma channels  
+	// OMAP2/3 has 32 dma channels
 	w &= ~(0x01f);
 	w |= (dma_chan[lch_queue].next_linked_ch);
 	OMAP_DMA_CLNK_CTRL_REG(lch_queue) = w;

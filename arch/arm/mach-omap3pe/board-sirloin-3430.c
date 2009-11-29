@@ -546,6 +546,7 @@ static struct gpio_keys_button board_gpio_keys_buttons[] = {
 		.debounce    = 20,
 		.type	     = EV_KEY,
 		.wakeup      = 0,
+		.pin         = "AE7_3430_GPIO24_KEY_VOL_UP",
 #ifdef  CONFIG_GPIO_KEYS_CONSOLE_TRIGGER
 		.options     = OPT_CONSOLE_TRIGGER,
 #endif
@@ -558,6 +559,7 @@ static struct gpio_keys_button board_gpio_keys_buttons[] = {
 		.debounce    = 20,
 		.type	     = EV_KEY,
 		.wakeup      = 0,
+		.pin         = "AF7_3430_GPIO25_KEY_VOL_DN",
 	},
 	{
 		.code        = KEY_PTT,
@@ -576,6 +578,7 @@ static struct gpio_keys_button board_gpio_keys_buttons[] = {
 		.debounce    = 20,
 		.type        = EV_SW,
 		.wakeup      = 1,
+		.pin         = "AH7_3430_GPIO27_SLIDER_OPEN",
 	},
 	{
 		.code        = SW_RINGER,
@@ -608,7 +611,8 @@ static struct gpio_keys_button board_gpio_keys_buttons[] = {
 		.desc        = "core navi",
 		.debounce    = 20,
 		.type        = EV_KEY,
-		.wakeup      = 1,
+		.wakeup      = 0,
+		.pin         = "AE13_3430_GPIO17_CORE_NAVI",
 #ifdef  CONFIG_GPIO_KEYS_CONSOLE_TRIGGER
 		.options     = OPT_CONSOLE_TRIGGER,
 #endif

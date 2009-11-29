@@ -11,6 +11,9 @@ struct gpio_keys_button {
 	int type;		/* input event type (EV_KEY, EV_SW) */
 	int wakeup;		/* configure the button as a wake-up source */
 	int options;		/* device specific options */
+#ifdef CONFIG_ARCH_OMAP3
+	char *pin;              /* pin mux name */
+#endif
 };
 
 struct gpio_keys_platform_data {

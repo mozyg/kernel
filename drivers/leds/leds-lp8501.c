@@ -1,11 +1,11 @@
 /*
  *  linux/drivers/leds/leds-lp8501.c - NS LED driver for the LP8501
  *
- * Copyright (C) 2008-2009 Palm, Inc. 
+ * Copyright (C) 2008-2009 Palm, Inc.
  *
  * Authors: Kevin McCray (kevin.mccray@palm.com)
  *          Brian Xiong (brian.xiong@palm.com)
- * 
+ *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; version 2 of the License.

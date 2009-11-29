@@ -2,8 +2,8 @@
  * linux/arch/arm/mach-omap3pe/context.c
  *
  * Copyright (C) 2008-2009 Palm, Inc.
- * 
- * Based on linux/arch/arm/mach-omap2 by 
+ *
+ * Based on linux/arch/arm/mach-omap2 by
  *
  * Copyright (C) 2006-2007 Texas Instruments, Inc.
  *

@@ -68,8 +68,14 @@ struct acm_wb {
 	dma_addr_t dmah;
 	int len;
 	int use;
+	int started;
 	struct urb		*urb;
 	struct acm		*instance;
+	unsigned long		t_alloc;
+	unsigned long		t_delayed;
+	unsigned long		t_start;
+	unsigned long		t_done;
+	unsigned long		t_killed;
 };
 
 struct acm_rb {

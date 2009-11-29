@@ -2817,7 +2817,7 @@ omap_ep_setup(char *name, u8 addr, u8 type,
 				|| cpu_is_omap15xx())
 			dbuf = 0;
 #else
-        // Enabling double buffering with pio 
+        // Enabling double buffering with pio
         // makes the chip very confused. 
         if(!use_dma || machine_is_omap_apollon()
 				    || cpu_is_omap15xx())

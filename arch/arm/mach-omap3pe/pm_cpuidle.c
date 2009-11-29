@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2008-2009 Palm, Inc.
- * 
+ *
  * Based on OMAP3 CPU idle implmentation.
  *
  * Copyright (C) 2007 Texas Instruments, Inc.

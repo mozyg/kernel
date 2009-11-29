@@ -1,9 +1,9 @@
 /*
  * linux/arch/arm/mach-omap3pe/clock_tree.h
- *   
+ *
  * Copyright (C) 2008-2009 Palm, Inc.
  * Based on OMAP2 clock framework created by
- *  
+ *
  * Copyright (C) 2007 Texas Instruments, Inc.
  * Karthik Dasu <karthik-dp@ti.com>
  *

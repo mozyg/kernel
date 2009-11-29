@@ -1,6 +1,6 @@
 /*
- * Copyright (C) 2008-2009 Palm, Inc. 
- * 
+ * Copyright (C) 2008-2009 Palm, Inc.
+ *
  * Based on Driver for keys on GPIO lines capable of generating interrupts.
  *
  * Copyright 2005 Phil Blundell
@@ -29,6 +29,11 @@
 #include <linux/gpio_keys_pe.h>
 
 #include <asm/gpio.h>
+
+#ifdef CONFIG_ARCH_OMAP3
+#include <asm/arch/mux.h>
+#include <asm/arch/control.h>
+#endif
 
 #ifdef CONFIG_INPUT_EVDEV_TRACK_QUEUE
 extern int evdev_get_queue_state(struct input_dev *dev);
@@ -128,9 +133,9 @@ gpio_key_get_option(char **str, int *pint)
 *
 ******************************************************************************/
 static ssize_t
-gpio_wake_keys_show( struct device *dev,
-                     struct device_attribute *dev_attr, 
-                     char  *buf)
+gpio_wakeup_keys_show( struct device *dev,
+                       struct device_attribute *dev_attr, 
+                       char  *buf)
 {
 	ssize_t count = 0 ;
 	int i;
@@ -166,7 +171,7 @@ gpio_wake_keys_show( struct device *dev,
 *
 ******************************************************************************/
 static ssize_t
-gpio_wake_keys_store(struct device *dev, 
+gpio_wakeup_keys_store(struct device *dev, 
                      struct device_attribute *dev_attr, 
                      const char *buf, size_t count)
 {
@@ -201,7 +206,74 @@ gpio_wake_keys_store(struct device *dev,
     return count;
 }
 
-static DEVICE_ATTR(gpio_wake_keys, S_IRUGO | S_IWUGO, gpio_wake_keys_show, gpio_wake_keys_store);
+static DEVICE_ATTR(wakeup_keys, S_IRUGO | S_IWUGO, 
+                   gpio_wakeup_keys_show, gpio_wakeup_keys_store);
+
+
+/******************************************************************************
+*
+* gpio_set_wake_key_store()
+*
+* SysFS interface for configuring /sys/class/input/inputXX/gpio_wake_keys
+* Accept a single key. Set and Clear methods are provided
+*
+* Inputs
+*   none
+*
+* Returns
+*   none
+*
+******************************************************************************/
+
+static void
+gpio_set_wakeup_key (struct gpio_keys_platform_data *pdata, 
+                     const char *buf, int set)
+{
+	char *s = (char *) buf;
+	int i, rc, key_code = 0;
+
+	if (pdata == NULL) 
+		return;
+
+	rc = gpio_key_get_option(&s, &key_code);
+	if (rc <= 0 )
+		return;
+
+	if ((key_code <= 0) || (key_code >= KEY_MAX))
+		return;
+		
+	for (i = 0; i < pdata->nbuttons; i++) {
+		if (key_code == pdata->buttons[i].code) {
+			if( set ) 
+				pdata->buttons[i].wakeup = 1;
+			else
+				pdata->buttons[i].wakeup = 0;
+		}
+	}
+}
+
+static ssize_t
+gpio_set_wakeup_key_store(struct device *dev, 
+                          struct device_attribute *dev_attr, 
+                          const char *buf, size_t count)
+{
+	struct gpio_keys_platform_data *pdata = dev->parent->platform_data;
+	gpio_set_wakeup_key(pdata, buf, 1);
+	return count;
+}
+
+static ssize_t
+gpio_clear_wakeup_key_store(struct device *dev, 
+                            struct device_attribute *dev_attr, 
+                            const char *buf, size_t count)
+{
+	struct gpio_keys_platform_data *pdata = dev->parent->platform_data;
+	gpio_set_wakeup_key(pdata, buf, 0);
+	return count;
+}
+
+static DEVICE_ATTR(wakeup_key_set,   S_IWUGO, NULL, gpio_set_wakeup_key_store);
+static DEVICE_ATTR(wakeup_key_clear, S_IWUGO, NULL, gpio_clear_wakeup_key_store);
 
 
 #if CONFIG_GPIO_KEYS_TRIGGER
@@ -475,15 +547,35 @@ gpio_keys_probe(struct platform_device *pdev)
 	}
 
 	/* Create SYSFS attr for gpio keys */
-	rc = device_create_file(&input->dev, &dev_attr_gpio_wake_keys);
+	rc = device_create_file(&input->dev, &dev_attr_wakeup_keys);
 	if (rc){
 		printk(KERN_ERR "%s: failed to create device attr\n", 
 		                 pdev->name );
 		goto err_device_create_file0;
 	}
 
+	rc = device_create_file(&input->dev, &dev_attr_wakeup_key_set);
+	if (rc){
+		printk(KERN_ERR "%s: failed to create device attr\n", 
+		                 pdev->name );
+		goto err_device_create_file1;
+	}
+
+	rc = device_create_file(&input->dev, &dev_attr_wakeup_key_clear);
+	if (rc){
+		printk(KERN_ERR "%s: failed to create device attr\n", 
+		                 pdev->name );
+		goto err_device_create_file2;
+	}
+
 	return 0;
 
+err_device_create_file2:
+	device_remove_file(&kdev->idev->dev, &dev_attr_wakeup_key_set);
+
+err_device_create_file1:
+	device_remove_file(&kdev->idev->dev, &dev_attr_wakeup_keys);
+	
 err_device_create_file0:
 	for (i = i - 1; i >= 0; i--)
 		gpio_keys_unregister_button (pdev, i);
@@ -501,7 +593,9 @@ gpio_keys_remove(struct platform_device *pdev)
 	struct gpio_keys_dev *kdev = platform_get_drvdata(pdev);
 
 	device_init_wakeup(&kdev->idev->dev, 0);
-	device_remove_file(&kdev->idev->dev, &dev_attr_gpio_wake_keys);
+	device_remove_file(&kdev->idev->dev, &dev_attr_wakeup_keys);
+	device_remove_file(&kdev->idev->dev, &dev_attr_wakeup_key_set);
+	device_remove_file(&kdev->idev->dev, &dev_attr_wakeup_key_clear);
 
 	for (i = 0; i < kdev->pdata->nbuttons; i++) {
 		gpio_keys_unregister_button ( pdev, i );
@@ -522,6 +616,32 @@ gpio_keys_remove(struct platform_device *pdev)
 static int gpio_keys_resume (struct platform_device *pdev);
 static int gpio_keys_suspend(struct platform_device *pdev, pm_message_t );
 
+static void gpio_keys_prepare_wakeup (struct gpio_keys_button *button)
+{
+	int irq = gpio_to_irq(button->gpio);
+	
+	disable_irq(irq);
+
+#ifdef CONFIG_ARCH_OMAP3
+	if( button->pin ) {
+		u16 addr, val, mask = OMAP34XX_PIN_OFF_INPUT_PULLUP | 
+		                      OMAP34XX_PIN_OFF_WAKEUPENABLE;
+		addr = omap_get_mux_reg(button->pin);
+		if( addr ) {
+			val  = omap_ctrl_readw(addr);
+			if (button->wakeup)
+				val |= mask;
+			else
+				val &= ~mask;
+			omap_ctrl_writew (val, addr);
+		}
+	}
+#endif
+	if (button->wakeup) {
+		enable_irq_wake(irq);
+	}
+}
+
 static int gpio_keys_suspend(struct platform_device *pdev, pm_message_t pm_state)
 {
 	int i;
@@ -530,12 +650,7 @@ static int gpio_keys_suspend(struct platform_device *pdev, pm_message_t pm_state
 
 	if (device_may_wakeup(&kdev->idev->dev)) {
 		for (i = 0; i < pdata->nbuttons; i++) {
-			struct gpio_keys_button *button = &pdata->buttons[i];
-			int irq = gpio_to_irq(button->gpio);
-			disable_irq(irq);
-			if (button->wakeup) {
-				enable_irq_wake(irq);
-			}
+			gpio_keys_prepare_wakeup (&pdata->buttons[i]);
 		}
 #ifdef CONFIG_INPUT_EVDEV_TRACK_QUEUE
 		{ 

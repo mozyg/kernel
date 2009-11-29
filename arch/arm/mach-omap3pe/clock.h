@@ -1,8 +1,8 @@
 /*
  * linux/arch/arm/mach-omap3pe/clock.h
  *
- * Based on linux/arch/arm/mach-omap2/clock.h  
- *  
+ * Based on linux/arch/arm/mach-omap2/clock.h
+ *
  * Copyright (C) 2007 Texas Instruments, Inc.
  * Karthik Dasu <karthik-dp@ti.com>
  *

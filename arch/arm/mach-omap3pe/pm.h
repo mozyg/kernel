@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2008-2009 Palm, Inc.
  *
- * Based on 
+ * Based on
  *
  * OMAP3 Power Management Routines
  *

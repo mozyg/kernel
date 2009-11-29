@@ -2,8 +2,8 @@
  * linux/arch/arm/mach-omap3pe/devices.c
  *
  * Copyright (C) 2008-2009 Palm, Inc.
- * 
- * Based on linux/arch/arm/mach-omap2 
+ *
+ * Based on linux/arch/arm/mach-omap2
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by

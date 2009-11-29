@@ -1618,15 +1618,12 @@ gadgetfs_unbind (struct usb_gadget *gadget)
 		destroy_ep_data (data);
 	}	
 
-	/* release dev */
-	put_dev(the_device);
-	the_device = NULL;
-
 	/* we've already been disconnected ... no i/o is active */
 	if (dev->req)
 		usb_ep_free_request (gadget->ep0, dev->req);
 	DBG (dev, "%s done\n", __FUNCTION__);
 	put_dev (dev);
+	the_device = NULL;
 }
 
 static int
