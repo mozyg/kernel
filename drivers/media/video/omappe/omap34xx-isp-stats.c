@@ -257,14 +257,19 @@ static int omap34xx_isp_stats_videobuf_init(struct omap34xx_v4l2_device *dev,
 {
 	int rc;
 	size_t sof;
-	size_t stats;
-	struct omap34xx_dma_block *block = videobuf_to_block(qbuf);
+	size_t stats = 0;
+	struct omap34xx_dma_block *block = get_omap34xx_buf(qbuf)->block;
 	struct omap34xx_isp_stats_data *data = dev->priv;
 	struct omap34xx_isp_stats_buffer *buf;
 
 	buf = container_of(qbuf, struct omap34xx_isp_stats_buffer, qbuf);
 	stats = PAGE_ALIGN(data->fmt.h3a_aeawb.size);
 	sof = PAGE_ALIGN(data->fmt.smia10.sof_size);
+
+	if (!block) {
+		rc = -EINVAL;
+		goto exit;
+	}
 
 	BUG_ON((stats + sof) > block->size);
 

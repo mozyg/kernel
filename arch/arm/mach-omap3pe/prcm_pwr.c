@@ -43,7 +43,9 @@
 #include "prcm_pwr.h"
 
 extern void omap3_show_iopad_wkup_event(void);
+#ifdef CONFIG_FASTPATH
 extern void omap3_wakeup_sources_save(void);
+#endif
 
 /******************************************************************************
  *
@@ -1826,6 +1828,9 @@ restore:
 Fail:
 	wkup_log_printk_suspend_event  ( wkup_log_idx, 1);
 
+#ifdef CONFIG_FASTPATH
+	omap3_wakeup_sources_save();
+#endif
 	return PRCM_FAIL;
 }
 

@@ -66,6 +66,5 @@ obj-$(CONFIG_SND) 			+= board-sirloin-headset-detect.o
 obj-$(CONFIG_MMC_HSMMC_PE)		+= board-sirloin-3430-hsmmc.o
 
 obj-$(CONFIG_FASTPATH) += board-sirloin-3430-wk.o
-obj-$(CONFIG_FASTPATH) += fastpath.o
 
 endif

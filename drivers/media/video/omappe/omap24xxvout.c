@@ -158,7 +158,7 @@ static struct videobuf_queue_ops dummy_vbq_ops;
  * Maximum amount of memory to use for rendering buffers.
  * Default is enough to four (RGB24) VGA buffers.
  */
-#define MAX_ALLOWED_VIDBUFFERS            2
+#define MAX_ALLOWED_VIDBUFFERS            4
 //MAR: render_mem  is not used
 //static int render_mem = VID_MAX_WIDTH * VID_MAX_HEIGHT * 4 * MAX_ALLOWED_VIDBUFFERS;
 
@@ -257,6 +257,23 @@ try_format (struct v4l2_pix_format *pix)
 	pix->field = V4L2_FIELD_NONE;
 	pix->priv = 0;
 
+	switch(pix->colorspace)
+	{
+		case V4L2_COLORSPACE_SMPTE170M:
+		case V4L2_COLORSPACE_SMPTE240M:
+		case V4L2_COLORSPACE_REC709:
+		case V4L2_COLORSPACE_BT878:
+		case V4L2_COLORSPACE_470_SYSTEM_M:
+		case V4L2_COLORSPACE_470_SYSTEM_BG:
+		case V4L2_COLORSPACE_JPEG:
+		case V4L2_COLORSPACE_SRGB:
+			break;
+		default:
+			printk(KERN_WARNING "V4L2_COLORSPACE not supported %d\n",
+					pix->colorspace);
+			goto try_format_exit;
+	}
+
 	switch (pix->pixelformat){
 	case V4L2_PIX_FMT_YUYV:
 	case V4L2_PIX_FMT_UYVY:
@@ -281,7 +298,9 @@ try_format (struct v4l2_pix_format *pix)
 	}
 	pix->bytesperline = pix->width * bpp;
 	pix->sizeimage = pix->bytesperline * pix->height;
-	return(bpp);
+
+try_format_exit:
+	return bpp;
 }
 
 static void
@@ -449,7 +468,9 @@ omap24xxvout_do_ioctl (struct inode *inode, struct file *file,
 			/* don't allow to change img for the linked layer */
 			if (vout->vid == vout_linked)
 				return -EINVAL;
-			try_format (&f->fmt.pix);
+			if (!try_format (&f->fmt.pix))
+				return -EINVAL;
+
 			return 0;
 		}
 		default:
@@ -502,12 +523,20 @@ omap24xxvout_do_ioctl (struct inode *inode, struct file *file,
 				return -EINVAL;
 
 			/* change to samller size is OK */
-			bpp = try_format (&f->fmt.pix);
+			if (!(bpp = try_format (&f->fmt.pix)))
+				return -EINVAL;
+
 			f->fmt.pix.sizeimage = f->fmt.pix.width * f->fmt.pix.height *bpp;
 
 			/* try & set the new output format */
 			vout->bpp = bpp;
 			vout->pix = f->fmt.pix;
+
+			/* set colorspace */
+			omap2_disp_get_dss();
+			omap2_disp_set_default_colorconv(vout->vid, &vout->pix);
+			omap2_disp_put_dss();
+
 			vout->vrfb_bpp = 1;
 			/* If YUYV then vrfb bpp is 2, for others its 1*/
 			if (V4L2_PIX_FMT_YUYV == vout->pix.pixelformat
@@ -1548,6 +1577,7 @@ omap24xxvout_suspend (struct platform_device *dev, pm_message_t state)
 	if (vout->opened){
 		/* stall vid DMA */
 		if (vout->streaming){
+			omap2_disp_save_initstate(vout->vid);
 			omap2_disp_disable_layer (vout->vid);
 			/*
 			 * Check if the hidden buffer transfer is happening with DMA
@@ -1584,6 +1614,8 @@ omap24xxvout_resume (struct platform_device *dev)
 		int k;
 		omap2_disp_get_dss ();
 
+		omap2_disp_restore_initstate(vout->vid);
+        
 		for(k = 0; k < 2; k++){
 			DPRINTK("omap2_disp_set_vrfb \n");
 			if(vout->rotation == 90 || vout->rotation == 270){

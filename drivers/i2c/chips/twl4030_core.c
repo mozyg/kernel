@@ -37,7 +37,6 @@
 #include <linux/random.h>
 #include <linux/syscalls.h>
 #include <linux/kthread.h>
-#include <linux/slab_def.h>
 #include <linux/i2c.h>
 #include <linux/slab.h>
 #include <linux/clk.h>

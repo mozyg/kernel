@@ -21,23 +21,17 @@
 #ifndef _LINUX_USB_GADGET_EVENT_H
 #define _LINUX_USB_GADGET_EVENT_H
 
-#define USB_GADGET_EVENT_NAME	"usb_gadget"
+enum gadget_event_source_type {
+	G_EV_SOURCE_UNKNOWN = -1,
+	G_EV_SOURCE_NONE = 0,
+	G_EV_SOURCE_BUS = 1,
+	G_EV_SOURCE_CHARGER = 2,
+};
 
-extern int usb_gadget_event_enable(int enable);
-extern int usb_gadget_event_vbus_presence(void);
-extern int usb_gadget_event_vbus_draw(unsigned mA);
-extern void usb_gadget_event_bind(void *arg);
-extern void usb_gadget_event_unbind(void);
+extern void gadget_event_host_connected(int host_connected);
+extern void gadget_event_bus_suspended(int bus_suspended);
+extern void gadget_event_media_loaded(int media_loaded);
+extern void gadget_event_media_requested(int media_requested);
+extern void gadget_event_power_state_changed(enum gadget_event_source_type source, int current_mA);
 
-extern int usb_gadget_event_media_loaded(int loaded);
-extern int usb_gadget_event_media_requested(int requested);
-extern int usb_gadget_event_reconnect(void);
-
-extern int transceiver_vbus_presence(int *presence);
-extern int transceiver_is_pullup_attached(int *attached);
-extern int transceiver_single_ended_state(int *dplus, int *dminus);
-#if defined(CONFIG_TWL4030_USB_FS_3_PIN) && defined(CONFIG_ARCH_OMAP24XX)
-extern void transceiver_reconnect(void);
-#endif
-
-#endif // _LINUX_USB_GADGET_EVENT_H
+#endif /* _LINUX_USB_GADGET_EVENT_H */

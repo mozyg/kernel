@@ -190,10 +190,12 @@ static void omap_set_vbus(struct musb *musb, int is_on)
 		musb_readb(musb->mregs, MUSB_DEVCTL));
 }
 
+#if 0
 static int omap_set_power(struct otg_transceiver *x, unsigned mA)
 {
 	return 0;
 }
+#endif
 
 int musb_platform_resume(struct musb *musb);
 
@@ -215,6 +217,8 @@ void musb_platform_set_mode(struct musb *musb, u8 musb_mode)
 		break;
 	}
 }
+
+static struct musb *the_musb;
 
 int __init musb_platform_init(struct musb *musb)
 {
@@ -240,6 +244,8 @@ int __init musb_platform_init(struct musb *musb)
 	musb->xceiv = *xceiv;
 	//musb_platform_resume(musb); /* REVISIT */
 
+	the_musb = musb; /* REVISIT */
+
 	OTG_SYSCONFIG_REG = SMARTIDLE | AUTOIDLE;
 	//OTG_SYSCONFIG_REG |= ENABLEWAKEUP;
 	OTG_INTERFSEL_REG = ULPI_12PIN;
@@ -253,8 +259,11 @@ int __init musb_platform_init(struct musb *musb)
 
 	if (is_host_enabled(musb))
 		musb->board_set_vbus = omap_set_vbus;
+#if 0
+	/* we should not override this */
 	if (is_peripheral_enabled(musb))
-		musb->xceiv.set_power = omap_set_power; /* REVISIT */
+		musb->xceiv.set_power = omap_set_power;
+#endif
 #if 0
 	musb->a_wait_bcon = MUSB_TIMEOUT_A_WAIT_BCON;
 
@@ -360,6 +369,20 @@ int musb_platform_exit(struct musb *musb)
 	clk_put(musb->clock);
 	musb->clock = 0;
 
+	return 0;
+}
+
+int musb_otg_state(enum usb_otg_state *state)
+{
+	struct musb *musb = the_musb;
+	unsigned long	flags;
+
+	if (!musb)
+		return -1;
+
+	spin_lock_irqsave(&musb->lock, flags);
+	*state = musb->xceiv.state;
+	spin_unlock_irqrestore(&musb->lock, flags);
 	return 0;
 }
 

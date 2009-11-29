@@ -354,5 +354,10 @@ config BATTERY_SIMPLE
 	help
 	  Say Y to enable a simple battery interface.
 
+config MODEM_POWER_ON_NOTIFY
+	bool "Modem power-on notification"
+	help
+	  Say Y to enable the modem power-on notification
+
 endif # MISC_DEVICES
 

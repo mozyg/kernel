@@ -230,21 +230,30 @@ is_valid_event (struct maxim_kp_state *state, int idx, int down )
 {
 	typeof(jiffies) ts;
 
-	if( idx < 0 || idx >= MAXIM7359_MAX_KEYS )
+	if( idx < 0 || idx >= MAXIM7359_MAX_KEYS ) {
+		printk(KERN_WARNING "%s: idx out of range (idx=%d)\n", MAXIM7359_I2C_DRIVER, idx);
 		return 0; // drop it
+	}
 
 	if(!state->pdata->key_prox_map) 
 		return 1; // no prox map just return a valid event 
 
-	if( down ) { 
-		if( drop_key_down(state, idx))
+	if( down ) {
+		if( state->key_down_tstamp[idx] ) {
+			printk(KERN_WARNING "%s: Two key down events (missing up). (idx=%d)\n", MAXIM7359_I2C_DRIVER, idx);
+		}
+		if( drop_key_down(state, idx)) {
+			printk(KERN_INFO "%s: Rejecting neighbouring key (idx=%d)\n", MAXIM7359_I2C_DRIVER, idx);
 			return 0;
+		}
 		ts = jiffies;
 		state->key_down_tstamp[idx] = ts ? ts : 1;
 		return 1;
 	} else {
-		if(!state->key_down_tstamp[idx])
+		if(!state->key_down_tstamp[idx]) {
+			printk(KERN_WARNING "%s: Got key up with no previous key down. (idx=%d)\n", MAXIM7359_I2C_DRIVER, idx);
 			return 0;  // key was not down (ignore event)
+		}
 		state->key_down_tstamp[idx] = 0;
 		return 1;
 	}
@@ -276,7 +285,7 @@ static void maxim_kp_scan(struct work_struct *work)
 	for(;;) {
 		res = maxim_i2c_read_u8(state->i2c_dev, MAXIM7359_FIFO, &val);
 		if( res < 0 ) {
-			printk (KERN_ERR "maxim_i2c_read_u8: failed (%d)\n", res );
+			printk (KERN_ERR "%s: maxim_i2c_read_u8: failed (%d)\n", MAXIM7359_I2C_DRIVER, res );
 			break;
 		}
 		if( val == FIFO_EMPTY ) {
@@ -286,13 +295,16 @@ static void maxim_kp_scan(struct work_struct *work)
 		row = (val & 0x3F) % 8;
 		idx = state->pdata->col_num * row + col;
 		key = state->pdata->keymap[idx];
-		if( key == KEY_RESERVED )
+		if( key == KEY_RESERVED ) {
+			printk(KERN_WARNING "%s: received reserved key. (val=0x%X)\n", MAXIM7359_I2C_DRIVER, val);
 			continue; // skip the key
-			
+		}	
 		down  = (val & KEY_RELEASED) ? 0 : 1; 
 		if( is_valid_event(state, idx, down)) {
 		    input_report_key(state->inp_dev, key, down);
 		    input_sync(state->inp_dev);
+		} else {
+			printk(KERN_INFO "%s: key event not valid. (idx=%d down=%d)\n", MAXIM7359_I2C_DRIVER, idx, down);
 		}
 	}
 }

@@ -85,10 +85,10 @@ void save_scratchpad_contents(void)
 		restore_address = get_restore_pointer();
 
 	/* Convert it to physical address */
-	restore_address = (u32 *) io_v2p(restore_address);
+	restore_address = (u32 *) virt_to_phys(restore_address);
 
 	/* Get address where registers are saved in SDRAM */
-	sdram_context_address = (u32 *) io_v2p(context_mem);
+	sdram_context_address = (u32 *) virt_to_phys(context_mem);
 
 	/* Booting configuration pointer*/
 	*(scratchpad_address++) = 0x0;

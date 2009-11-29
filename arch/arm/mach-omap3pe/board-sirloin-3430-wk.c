@@ -21,12 +21,13 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
-#include <linux/wakeup_sources.h>
 
 #include <asm/arch/mux.h>
 #include <asm/arch/control.h>
 
 #include <asm/arch/pm.h>
+
+#include "board-sirloin-3430-wk.h"
 
 /*************************************
  * Wakeup sources.
@@ -43,6 +44,7 @@ static struct wakeup_source omap3_wakeup_source[] = {
  { "MODEM_WAKE_USB",    "AC1_3430_GPIO155" },
  { "CORE_NAVI_WAKE",    "AE13_3430_GPIO17_CORE_NAVI" },
  { "BT_WAKE",           "AB1_BT_HOST_WAKE" },
+ { "WIFI_WAKE",         "AF3_WL_IRQ" },
 };
 
 static u32 omap3_wakeup_source_info;
@@ -92,6 +94,7 @@ int omap3_wakeup_sources_get(void)
 {
 	return omap3_wakeup_source_info;
 }
+EXPORT_SYMBOL(omap3_wakeup_sources_get);
 
 void omap3_wakeup_sources_clear(void)
 {

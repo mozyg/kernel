@@ -213,10 +213,47 @@ static void mmc_sdio_detect(struct mmc_host *host)
 	}
 }
 
+static void mmc_sdio_suspend(struct mmc_host *host)
+{
+    BUG_ON(!host);
+
+    return;
+}
+
+static void mmc_sdio_resume(struct mmc_host *host)
+{
+    int err = 0;
+
+    BUG_ON(!host);
+    BUG_ON(!host->card);
+
+    mmc_claim_host(host);
+
+    if (!mmc_host_is_spi(host)) {
+        mmc_set_bus_mode(host, MMC_BUSMODE_PUSHPULL);
+    }
+
+    mmc_set_clock(host, host->card->cis.max_dtr);
+    mmc_set_bus_width(host, MMC_BUS_WIDTH_4);
+
+remove:
+    mmc_release_host(host);
+
+    if (err) {
+        mmc_sdio_remove(host);
+
+        mmc_claim_host(host);
+        mmc_detach_bus(host);
+        mmc_release_host(host);
+    }
+    return;
+}
 
 static const struct mmc_bus_ops mmc_sdio_ops = {
 	.remove = mmc_sdio_remove,
 	.detect = mmc_sdio_detect,
+	.suspend = mmc_sdio_suspend,
+	.resume = mmc_sdio_resume,
 };
 
 

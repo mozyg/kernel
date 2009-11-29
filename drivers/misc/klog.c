@@ -38,9 +38,6 @@
 #define KLOG_MAGIC 0x6b6c6f67 // 'klog'
 #define KLOG_VERSION 1
 
-#define MAX_KLOG_SIZE (16*1024*1024)
-#define MAX_KLOGS 16
-
 struct klog_header {
 	uint32_t magic;
 	uint32_t ver;
@@ -92,7 +89,7 @@ static void _klog_write(const char *s, unsigned int count)
 {
 	unsigned int towrite;
 
-	if (klog_buf == NULL || klog_buf->len < 1)
+	if (klog_buf == NULL)
 		return;
 
 	/* trim the write if it happens to be huge */
@@ -154,19 +151,12 @@ void klog_write(const char *s, unsigned int count)
 static int __init klog_init(void)
 {
 	void *base;
-	struct klog_buffer_header *kbuf;
 
 	printk("klog_init: entry\n");
 	printk("klog_init: phys buffer is at 0x%lx\n", klog_phys);
 
-	if (klog_phys == 0)
+	if (klog_phys == 0 || klog_len == 0)
 	    return 0;
-
-	if (klog_len < sizeof(struct klog_header))
-		return 0;
-
-	if (klog_len > MAX_KLOG_SIZE)
-		return 0;
 
 	if (!request_mem_region(klog_phys, klog_len, "klog"))
 	    return 0;
@@ -182,60 +172,16 @@ static int __init klog_init(void)
 
 	printk("klog_init: magic 0x%x version 0x%x\n", klog->magic, klog->ver);
 
-	/* check to see if the klog header is valid */
+	/* check to see if it's valid */
 	if (klog->magic != KLOG_MAGIC || klog->ver != KLOG_VERSION) {
-	    printk("klog_init: header fails magic/version check\n");
+	    printk("klog_init: didn't find existing klog\n");
 	    return 0;
 	}
 
-	if (klog->len > klog_len) {
-		printk("klog_init: klog too large\n");
-		return 0;
-	}
+	printk("found klog, len %u, using buffer number %d\n", klog->len, klog->current_buf);
 
-	if (klog->buf_count > MAX_KLOGS || klog->current_buf >= klog->buf_count) {
-	    printk("klog_init: bad klog buffer count\n");
-	    return 0;
-	}
+	klog_buf = get_kbuf(klog->current_buf);
 
-	if (klog->len < (sizeof(struct klog_header) + sizeof(uint32_t) * klog->buf_count + sizeof(struct klog_buffer_header))) {
-		printk("klog_init: too short to hold a buffer\n");
-		return 0;
-	}
-
-	/* verify that the klog buffer pointer is valid */
-	if (klog->buf_table[klog->current_buf] >= klog->len - sizeof(struct klog_buffer_header)) {
-	    printk("klog_init: bad klog buffer pointer\n");
-	    return 0;
-	}
-
-	if (klog->buf_table[klog->current_buf] & 0x3) {
-		printk("klog_init: klog buffer pointer unaligned\n");
-		return 0;
-	}
-
-	/* get the klog buffer and validate that its header is valid */
-	kbuf = get_kbuf(klog->current_buf);
-
-	if (kbuf->magic != KLOG_BUFFER_MAGIC) {
-		printk("klog_init: bad klog buffer magic\n");
-		return 0;
-	}
-
-	if (kbuf->len == 0 || (klog->buf_table[klog->current_buf] + sizeof(struct klog_buffer_header) + kbuf->len) > klog->len) {
-		printk("klog_init: klog exceeds the memory reserved for it\n");
-		return 0;
-	}
-
-	if (kbuf->head >= kbuf->len || kbuf->tail >= kbuf->len) {
-		printk("klog_init: bad head/tail pointer\n");
-		return 0;
-	}
-
-	printk("found klog, len %u, using buffer number %d, len %u\n", klog->len, klog->current_buf, kbuf->len);
-
-	/* klog looks okay */
-	klog_buf = kbuf;
 	klog_printf("welcome to klog, buffer at %p, length %d\n", klog_buf, klog_buf->len);
 
 	return 0;

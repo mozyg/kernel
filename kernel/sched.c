@@ -3796,6 +3796,15 @@ static void __wake_up_common(wait_queue_head_t *q, unsigned int mode,
 			     int nr_exclusive, int sync, void *key)
 {
 	wait_queue_t *curr, *next;
+	unsigned long flags;
+
+	local_irq_save(flags);
+	if (!(flags & PSR_I_BIT)) {
+		printk("##### FLAGS %08x\n", flags);
+		printk("##### __wake_up_common() not locked!\n");
+		BUG();
+	}
+	local_irq_restore(flags);
 
 	list_for_each_entry_safe(curr, next, &q->task_list, task_list) {
 		unsigned flags = curr->flags;

@@ -53,19 +53,12 @@
 #define SIRLOIN_GPIO_HS_AMP_MUX_NORMAL   "G25_3430_GPIO086"
 #define SIRLOIN_GPIO_HS_AMP_MUX_OFFMODE  "G25_3430_GPIO086_OFFMODE"
 
-#define HS_INSERT_DELAY            1000
+#define HS_INSERT_DELAY            20
 #define HS_REMOVE_DELAY            20
 #define HS_BUTTON_DEBOUNCE_PERIOD  90
 #define HS_BUTTON_PRESS_TIMEOUT    90
+#define HS_BUTTON_PRESS_SLEEP	   40
 #define HS_TURNON_DELAY            40 /* time to wait for hardware to settle before powering amplifier */
-
-/* udev */
-#define HS_DEVICE_HS       "HS_DEVICE=headset"
-#define HS_DEVICE_HSMIC    "HS_DEVICE=headset-mic"
-#define HS_DEVICE_NONE     "HS_DEVICE="
-#define HS_BUTTON_DOWN     "HS_BUTTON=1"
-#define HS_BUTTON_UP       "HS_BUTTON=0"
-#define HS_BUTTON_NONE     "HS_BUTTON="
 
 #define INPUT_DEVICE_PHYS   "headset/input0"
 
@@ -235,7 +228,6 @@ static void headset_mic_detect_handler(struct delayed_work *work)
 {
 	struct headset_device *dev;
 	int mic;
-	char *envp[3];
 
 	dev = container_of(work, struct headset_device, headset_mic_detect_work);
 
@@ -253,12 +245,11 @@ static void headset_mic_detect_handler(struct delayed_work *work)
 
 		if (dev->mic_present) {
 			input_report_switch(dev->idev, SW_HEADPHONE_MIC_INSERT, 1);
-			envp[0] = HS_BUTTON_NONE;
-			envp[1] = HS_DEVICE_HSMIC;
-			envp[2] = NULL;
-			kobject_uevent_env(&dev->pdev->dev.kobj, KOBJ_CHANGE, envp);
 			mod_timer(&dev->enable_headset_timer,
 				jiffies + msecs_to_jiffies(HS_TURNON_DELAY));
+			/* Report headset removed if headset is inserted then mic is found
+			   so that states are synced up properly in hidd */
+			input_report_switch(dev->idev, SW_HEADPHONE_INSERT, 0);
 		}
 		else {
 			/* keep checking every 500ms if mic isnt found */
@@ -279,7 +270,6 @@ static void headset_mic_detect_handler(struct delayed_work *work)
 static void headset_insert_handler(struct headset_device *dev)
 {
 	int mic;
-	char *envp[3];
 
 	/* reset num_mic_check, so it detects mic for set time in seconds */
 	dev->num_mic_check = 0;
@@ -309,23 +299,11 @@ static void headset_insert_handler(struct headset_device *dev)
 		input_report_switch(dev->idev, SW_HEADPHONE_INSERT, 1);
 		schedule_delayed_work(&dev->headset_mic_detect_work, msecs_to_jiffies(500));
 	}
-
-	/* Send a udev event also.
-	 * hidd uses the input events but audiod still uses the udev events. */
-	envp[0] = HS_BUTTON_NONE;
-	if (dev->mic_present) {
-		envp[1] = HS_DEVICE_HSMIC;
-	} else {
-		envp[1] = HS_DEVICE_HS;
-	}
-	envp[2] = NULL;
-	kobject_uevent_env(&dev->pdev->dev.kobj, KOBJ_CHANGE, envp);
 }
 
 static void headset_remove_handler(struct headset_device *dev)
 {
 	int mic_was_present;
-	char *envp[3];
 	mic_was_present = dev->mic_present;
 
 	/* Can't have a headset button or mic if nothing is inserted, 
@@ -337,7 +315,7 @@ static void headset_remove_handler(struct headset_device *dev)
 	}
 
 	/* FIXME only turn on the amp if audio is streaming */
-    headset_force_amp_enable (dev, 0);
+	headset_force_amp_enable (dev, 0);
 
 	/* turn off mic bias in the case that we were still checking for mic but headset was removed */
 	if (dev->checking_mic) {
@@ -354,17 +332,6 @@ static void headset_remove_handler(struct headset_device *dev)
 	} else {
 		input_report_switch(dev->idev, SW_HEADPHONE_INSERT, 0);
 	}
-
-	/* FIXME Send a udev event also until hidd, audiod makes the
-	 * corresponding changes */
-	if (dev->button_pressed) {
-		envp[0] = HS_BUTTON_UP;
-	} else {
-		envp[0] = HS_BUTTON_NONE;
-	}
-	envp[1] = HS_DEVICE_NONE;
-	envp[2] = NULL;
-	kobject_uevent_env(&dev->pdev->dev.kobj, KOBJ_CHANGE, envp);
 
 	dev->button_pressed = 0;
 	dev->next_button_event = 0;
@@ -429,7 +396,6 @@ static void button_dispatch(unsigned long arg)
 {
 	struct headset_device *dev = (struct headset_device *)arg;
 	int i;
-	char *envp[3];
 
 	if (!(dev->headset_inserted && dev->mic_present) ||
 			!headset_inserted(dev)) {
@@ -437,19 +403,6 @@ static void button_dispatch(unsigned long arg)
 		dev->next_button_event = 0;
 		dev->button_pressed = 0;
 		return;
-	}
-
-	/* FIXME Send a udev event also until hidd, audiod makes the
-	 * corresponding changes */
-	envp[1] = HS_DEVICE_HSMIC;
-	envp[2] = NULL;
-	for (i = 0; i < dev->next_button_event; i++) {
-		if (dev->button_events[i] == BUTTON_UP) {
-			envp[0] = HS_BUTTON_UP;
-		} else {
-			envp[0] = HS_BUTTON_DOWN;
-		}
-		kobject_uevent_env(&dev->pdev->dev.kobj, KOBJ_CHANGE, envp);
 	}
 
 	for (i = 0; i < dev->next_button_event; i++) {
@@ -788,6 +741,11 @@ static int headset_suspend(struct platform_device *pdev, pm_message_t state)
 
 	headset_force_amp_enable (dev, 0);
 
+	if (dev->mic_present) {
+		dev->next_button_event = 0;
+		dev->button_pressed = 0;
+	}
+
 	if( device_may_wakeup(&dev->idev->dev)) {
 		// disable irq, but enable irq wake
 		disable_irq    (gpio_to_irq(dev->gpio_hs_plug_in));
@@ -809,7 +767,7 @@ static int headset_resume(struct platform_device *pdev)
 		return 0;
 	}
 
-	if( device_may_wakeup(&dev->idev->dev)) {
+	if (device_may_wakeup(&dev->idev->dev)) {
 		// disable wake and reenable irq
 		disable_irq_wake(gpio_to_irq(dev->gpio_hs_plug_in));
 		enable_irq (gpio_to_irq(dev->gpio_hs_plug_in));
@@ -817,6 +775,12 @@ static int headset_resume(struct platform_device *pdev)
 		disable_irq_wake(gpio_to_irq(dev->gpio_mic_ans_int));
 		enable_irq (gpio_to_irq(dev->gpio_mic_ans_int));
 	}
+
+	/* If headset is resumed, waking the device, then check
+	   to see if button was pressed if a mic is already inserted */
+	if (dev->mic_present && dev->headset_inserted)
+		mod_timer(&dev->button_press_timer,
+			jiffies + msecs_to_jiffies(HS_BUTTON_PRESS_SLEEP));
 
 	schedule_work(&dev->headset_detect_work);
 

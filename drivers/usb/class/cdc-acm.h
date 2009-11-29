@@ -92,13 +92,6 @@ struct acm_ru {
 	struct acm		*instance;
 };
 
-#define ACM_NN		16
-
-struct acm_ne {
-	struct list_head		list;
-	struct pioc_cdc_notification	notification;
-};
-
 struct acm {
 	struct usb_device *dev;				/* the corresponding usb device */
 	struct usb_interface *control;			/* control interface */
@@ -144,12 +137,10 @@ struct acm {
 	int notification_mode;				/* 0: not exist 1: normal 2: shared */
 	int notification_ifnum;				/* interface # that receives the shared notification */
 	int rx_flow;				/* current state of usb flow work */
-	int passthru_mode;
-	spinlock_t notif_lock;
-	struct acm_ne ne[ACM_NN];
-	struct list_head spare_notif_entries;
-	struct list_head filled_notif_entries;
-	wait_queue_head_t notif_wait;
+	spinlock_t modem_lock;
+	struct async_icount icount;
+	struct async_icount last_icount;
+	wait_queue_head_t modem_wait;
 };
 
 #define NOTIFICATION_NOT_EXIST	0

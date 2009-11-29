@@ -40,9 +40,6 @@
 #include <linux/usb/gadget.h>
 #include <linux/usb.h>
 #include <linux/usb/otg.h>
-#ifdef CONFIG_USB_GADGET_EVENT
-#include <linux/usb/gadget_event.h>
-#endif // CONFIG_USB_GADGET_EVENT
 
 #include <linux/console.h>
 
@@ -61,6 +58,13 @@
 #ifdef USE_USB_POWER_CONSTRAINT
 #include <asm/arch/resource.h>
 #endif
+
+#ifdef CONFIG_USB_GADGET_EVENT
+#include <linux/usb/gadget_event.h>
+#endif
+#include "charger_detector.h"
+
+#define CONFIGURED_MA	CONFIG_USB_GADGET_VBUS_DRAW	/* 500mA */
 
 /* Register defines */
 
@@ -307,6 +311,7 @@
 /*-------------------------------------------------------------------------*/
 
 struct twl4030_usb {
+	spinlock_t		lock;
 	struct otg_transceiver	otg;
 	int			irq;
 	u8			usb_mode;	/* pin configuration */
@@ -317,9 +322,13 @@ struct twl4030_usb {
 #ifdef USE_USB_POWER_CONSTRAINT
 	struct constraint_handle	*usb_power_constraint;
 #endif
+	int			mA;
+	struct work_struct	vbus_draw_work;
 #ifdef CONFIG_GPIO_KEYS_CONSOLE_TRIGGER
 	struct work_struct usbmux_timer_cb_work;
 #endif
+	struct delayed_work	phy_suspend_work;
+	int			phy_try_suspending;
 };
 
 static struct twl4030_usb *the_transceiver;
@@ -401,6 +410,8 @@ twl4030_usb_clear_bits(struct twl4030_usb *twl, u8 reg, u8 bits)
 
 static void enable_vbus_draw(struct twl4030_usb *twl, unsigned mA)
 {
+	twl->mA = mA;
+	schedule_work(&twl->vbus_draw_work);
 }
 
 static int twl4030_set_power(struct otg_transceiver *dev, unsigned mA)
@@ -744,9 +755,75 @@ static void twl4030_phy_power(struct twl4030_usb *twl, int on)
 	return;
 }
 
+extern int musb_otg_state(enum usb_otg_state *state);
+
+static int check_musb_idle(void)
+{
+	enum usb_otg_state state;
+
+	if (musb_otg_state(&state)) {
+		printk(KERN_INFO "%s: can't get otg_state\n", __func__);
+		return -1;
+	}
+	if (state == OTG_STATE_B_IDLE || state == OTG_STATE_UNDEFINED)
+		return 1;
+
+	/* musb is active */
+	return 0;
+}
+
+static void phy_suspend(struct twl4030_usb *twl)
+{
+	printk(KERN_INFO "%s: enter\n", __func__);
+
+	twl4030_phy_power(twl, 0);
+	twl->asleep = 1;
+#ifdef USE_USB_POWER_CONSTRAINT
+	/* Release USB constraint on OFF/RET */
+	if (twl->usb_power_constraint){
+		constraint_remove(twl->usb_power_constraint);
+	}
+#endif
+}
+
+static void phy_suspend_work(struct work_struct *work)
+{
+	struct twl4030_usb *twl = container_of(work, struct twl4030_usb,
+					       phy_suspend_work.work);
+	unsigned long flags;
+
+	spin_lock_irqsave(&twl->lock, flags);
+	if (twl->phy_try_suspending == 0) { /* cancelled */
+		printk(KERN_INFO "%s: cancelled\n", __func__);
+		spin_unlock_irqrestore(&twl->lock, flags);
+		return;
+	}
+	if (twl->phy_try_suspending > 10) { /* timeout - tried 10 times */
+		printk(KERN_INFO "%s: timeout (retry=%d)\n",
+		       __func__, twl->phy_try_suspending);
+		twl->phy_try_suspending = 0;
+		spin_unlock_irqrestore(&twl->lock, flags);
+		return;
+	}
+
+	if (check_musb_idle() == 0) { /* musb is still active */
+		twl->phy_try_suspending++;
+		printk(KERN_INFO "%s: musb is still active (retry=%d)\n",
+		       __func__, twl->phy_try_suspending);
+		schedule_delayed_work(&twl->phy_suspend_work,
+				      msecs_to_jiffies(10));
+		spin_unlock_irqrestore(&twl->lock, flags);
+		return;
+	}
+
+	spin_unlock_irqrestore(&twl->lock, flags);
+	phy_suspend(twl);
+}
+
 static void twl4030_phy_suspend(int irq_disable)
 {
 	struct twl4030_usb *twl = the_transceiver;
+	unsigned long flags;
 
 	printk(KERN_INFO "%s: irq_disable=%d\n", __func__, irq_disable);
 
@@ -756,29 +833,47 @@ static void twl4030_phy_suspend(int irq_disable)
 		/* enable rising edge interrupt to detect cable attach */
 		usb_irq_enable(1, 0);
 
-	if (twl->asleep)
+	spin_lock_irqsave(&twl->lock, flags);
+	if (twl->asleep) {
+		printk(KERN_INFO "%s: phy is already asleep\n", __func__);
+		spin_unlock_irqrestore(&twl->lock, flags);
 		return;
-
-	twl4030_phy_power(twl, 0);
-	twl->asleep = 1;
-
-#ifdef USE_USB_POWER_CONSTRAINT
-	/* Release USB constraint on OFF/RET */
-	if (twl->usb_power_constraint){
-		constraint_remove(twl->usb_power_constraint);
 	}
-#endif
-	return;
+
+	if (twl->usb_mode == T2_USB_MODE_ULPI) {
+		if (check_musb_idle() == 0) { /* musb is still active */
+			twl->phy_try_suspending = 1;
+			printk(KERN_INFO "%s: musb is still active (retry=%d)\n",
+			       __func__, twl->phy_try_suspending);
+			schedule_delayed_work(&twl->phy_suspend_work,
+					      msecs_to_jiffies(10));
+			spin_unlock_irqrestore(&twl->lock, flags);
+			return;
+		}
+	}
+	spin_unlock_irqrestore(&twl->lock, flags);
+
+	phy_suspend(twl);
 }
 
 static void twl4030_phy_resume(void)
 {
 	struct twl4030_usb *twl = the_transceiver;
+	unsigned long flags;
 
-	printk(KERN_INFO "%s: enter\n", __func__);
+	cancel_delayed_work_sync(&twl->phy_suspend_work);
 
-	if (!twl->asleep)
+	spin_lock_irqsave(&twl->lock, flags);
+	twl->phy_try_suspending = 0;
+
+	if (!twl->asleep) {
+		printk(KERN_INFO "%s: phy is not asleep (ignore)\n", __func__);
+		spin_unlock_irqrestore(&twl->lock, flags);
 		return;
+	}
+	spin_unlock_irqrestore(&twl->lock, flags);
+
+	printk(KERN_INFO "%s: mode=%d\n", __func__, twl->usb_mode);
 
 #ifdef USE_USB_POWER_CONSTRAINT
 	/* Acquire USB constraint on OFF/RET */
@@ -811,8 +906,10 @@ int transceiver_vbus_presence(int *presence)
 	}
 
 	// Read the USB presence.
+	twl4030_i2c_access(1);
 	ret = twl4030_i2c_read_u8(TWL4030_MODULE_PM_MASTER, &reg,
 					STS_HW_CONDITIONS);
+	twl4030_i2c_access(0);
 
 	if (!ret)
 		*presence = !!(STS_VBUS & reg);
@@ -833,7 +930,9 @@ int transceiver_is_pullup_attached(int *attached)
 	}
 
 	// Read the pull-up state.
+	twl4030_i2c_access(1);
 	ret = twl4030_i2c_read_u8(TWL4030_MODULE_USB, &reg, FUNC_CTRL);
+	twl4030_i2c_access(0);
 
 	if (!ret)
 		*attached = !!(FUNC_CTRL_TERMSELECT & reg);
@@ -848,7 +947,9 @@ int transceiver_single_ended_state(int *dplus, int *dminus)
 	int ret;
 
 	// Read the single ended receiver state.
+	twl4030_i2c_access(1);
 	ret = twl4030_i2c_read_u8(TWL4030_MODULE_USB, &reg, DEBUG_REG);
+	twl4030_i2c_access(0);
 
 	if (!ret)
 	{
@@ -872,6 +973,21 @@ void transceiver_reconnect(void)
 }
 EXPORT_SYMBOL(transceiver_reconnect);
 #endif
+
+static void vbus_draw_work(struct work_struct *work)
+{
+	struct twl4030_usb *twl = container_of(work, struct twl4030_usb,
+					       vbus_draw_work);
+	if (twl->mA == CONFIGURED_MA) {
+		charger_cancel_detection();
+		gadget_event_host_connected(1);
+	} else if (twl->mA == 0) {
+		gadget_event_host_connected(0);
+	}
+#ifdef CONFIG_USB_GADGET_EVENT
+	gadget_event_power_state_changed(G_EV_SOURCE_BUS, twl->mA);
+#endif
+}
 
 static void twl4030_usb_ldo_init(struct twl4030_usb *twl)
 {
@@ -932,6 +1048,7 @@ static irqreturn_t twl4030_usb_irq(int irq, void *_twl)
 
 	if (val & USB_PRES_RISING) {
 		twl4030_phy_resume();
+		charger_schedule_detection();
 		/* twl4030charger_usb_en(1); */
 #ifdef CONFIG_MACH_BRISKET
 		b_peripheral((struct twl4030_usb *)_twl);
@@ -940,13 +1057,10 @@ static irqreturn_t twl4030_usb_irq(int irq, void *_twl)
 #ifdef CONFIG_MACH_BRISKET
 		b_idle((struct twl4030_usb *)_twl);
 #endif
+		charger_vbus_lost();
 		/* twl4030charger_usb_en(0); */
 		twl4030_phy_suspend(0);
 	}
-
-#ifdef CONFIG_USB_GADGET_EVENT
-	usb_gadget_event_vbus_presence();
-#endif // CONFIG_USB_GADGET_EVENT
 
 	ret = IRQ_HANDLED;
 
@@ -968,9 +1082,10 @@ static int twl4030_set_suspend(struct otg_transceiver *x, int suspend)
 	else {
 		int presence;
 
+		twl4030_phy_resume();
 		transceiver_vbus_presence(&presence);
 		if (presence)
-			twl4030_phy_resume();
+			charger_schedule_detection();
 		else
 			twl4030_phy_suspend(0);
 	}
@@ -1277,6 +1392,8 @@ static int __init twl4030_usb_init(void)
 	if (!twl)
 		return 0;
 
+	spin_lock_init(&twl->lock);
+
 	the_transceiver = twl;
 
 	/* Register a platform device/driver to listen for PM messages when
@@ -1338,16 +1455,18 @@ static int __init twl4030_usb_init(void)
 	    twl->usb_mode == T2_USB_MODE_CEA2011_3PIN){
 		int presence;
 
-		/* Suspend PHY but keep PRES int enabled */
-		twl4030_phy_suspend(0);
-
 		/* Check for Cold plugging case: if device already connected */
 		transceiver_vbus_presence(&presence);
 		if (presence) {
 			printk(KERN_INFO "twl4030_usb: Device ATTACHED: Cold plugging\n");
+			twl4030_phy_suspend(0);
 			twl4030_phy_resume();
-		} else
+			charger_schedule_detection();
+		} else {
 			printk(KERN_INFO "twl4030_usb: Device NOT-ATTACHED at bootup\n");
+			/* Suspend PHY but keep PRES int enabled */
+			twl4030_phy_suspend(0);
+		}
 	}
 
 	/* Enable irq wake up */
@@ -1358,6 +1477,11 @@ static int __init twl4030_usb_init(void)
 	twl->usb_power_constraint = constraint_get("usb", &cnstr_id);
 #endif
 	otg_set_transceiver(&twl->otg);
+
+	INIT_WORK(&twl->vbus_draw_work, vbus_draw_work);
+	INIT_DELAYED_WORK(&twl->phy_suspend_work, phy_suspend_work);
+
+	twl->phy_try_suspending = 0;
 
 #ifdef CONFIG_GPIO_KEYS_CONSOLE_TRIGGER
 	INIT_WORK(&twl->usbmux_timer_cb_work, usbmux_timer_cb_wq_func);

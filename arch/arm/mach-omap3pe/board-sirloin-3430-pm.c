@@ -30,6 +30,7 @@
 
 #ifdef CONFIG_FASTPATH
 #include <linux/fastpath.h>
+#include "board-sirloin-3430-wk.h"
 #endif
 
 #include "prcm-regs.h"
@@ -47,6 +48,11 @@
 //#define printd(args...) printk(args)
 #ifndef printd
 #  define printd(args...)
+#endif
+
+#ifdef CONFIG_FASTPATH
+int omap3_wakeup_sources_get(void);
+void omap3_wakeup_sources_clear(void);
 #endif
 
 /******************************************************************************/
@@ -120,7 +126,7 @@ static void setup_twl4030_regs(void)
 #ifdef POWER_OFF_VAUX1_VAUX3_DURING_SUSPEND
 	twl_write(TWL4030_VAUX1_REMAP,     TWL_RES_OFF);
 #else
-	twl_write(TWL4030_VAUX1_REMAP,     TWL_RES_SLEEP);
+	twl_write(TWL4030_VAUX1_REMAP,     TWL_RES_ACTIVE);
 #endif
 
 	/* VAUX2
@@ -138,7 +144,7 @@ static void setup_twl4030_regs(void)
 #ifdef POWER_OFF_VAUX1_VAUX3_DURING_SUSPEND
 	twl_write(TWL4030_VAUX3_REMAP,     TWL_RES_OFF);
 #else
-	twl_write(TWL4030_VAUX3_REMAP,     TWL_RES_SLEEP);
+	twl_write(TWL4030_VAUX3_REMAP,     TWL_RES_ACTIVE);
 #endif
 
 	/* VAUX4
@@ -350,6 +356,8 @@ static int omap3_pm_sirloin_valid(suspend_state_t state)
 static int omap3_pm_sirloin_prepare(void)
 {
 #ifdef CONFIG_FASTPATH
+	omap3_wakeup_sources_clear();
+
 	if (fastpath_prepare()) {
 		printk(KERN_WARNING
 			"%s: Could not prepare wakeup sources.\n", __FUNCTION__);
@@ -458,7 +466,10 @@ static int omap3_pm_sirloin_fastsleep(void)
 {
 	int fastsleep = 0;
 #ifdef CONFIG_FASTPATH
-	fastsleep = fastpath_fastsleep();
+	int is_rtc_only;
+	/* If RTC is only wakeup source, we may return to sleep. */
+	is_rtc_only = omap3_wakeup_sources_get() == WAKEUP_SOURCE_RTC;
+	fastsleep = fastpath_fastsleep(is_rtc_only);
 #endif
 	return fastsleep;
 }

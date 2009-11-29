@@ -86,8 +86,6 @@ struct omap_lcd_controller {
 
 	struct mutex lock;
 	int controller_state;
-	int video1_was_on;
-	int video2_was_on;
 
 	struct fb_var_screeninfo panel_info;
 	struct omap_dss_config dss_config_lpr_on;
@@ -107,6 +105,7 @@ struct omap_lcd_controller {
 	int (*sdi_power_enable)(int);
 };
 
+static struct omap_lcd_controller *localct = NULL;
 
 
 
@@ -1336,8 +1335,6 @@ static void lcd_controller_enable(struct omap_lcd_controller *ct)
 	omap2_disp_restore_initstate(OMAP_DSS_GENERIC);
 	omap2_disp_restore_initstate(OMAP_DSS_DISPC_GENERIC);
 	omap2_disp_restore_initstate(OMAP2_GRAPHICS);
-	omap2_disp_restore_initstate(OMAP2_VIDEO1);
-	omap2_disp_restore_initstate(OMAP2_VIDEO2);
 
 	/* Force BSOD if BA0 is bad...
 	 */
@@ -1358,36 +1355,10 @@ static void lcd_controller_enable(struct omap_lcd_controller *ct)
 
 	/* Restore state of video layers. TBD do more...it is only a partial fix....*/
 
-	if (ct->video1_was_on) {
-		if (omap2_disp_is_layer_used(OMAP2_VIDEO1))
-		{
-			omap2_disp_enable_layer(OMAP2_VIDEO1);
-		}
-		else
-		{
-			omap2_disp_disable_layer(OMAP2_VIDEO1);
-			display_changed = true;
-		}
-	}
-	if (ct->video2_was_on) {
-		if (omap2_disp_is_layer_used(OMAP2_VIDEO2))
-		{
-			omap2_disp_enable_layer(OMAP2_VIDEO2);
-		}
-		else
-		{
-			omap2_disp_disable_layer(OMAP2_VIDEO2);
-			display_changed = true;
-		}
-	}
 
 	omap2_disp_enable_output_dev(OMAP2_OUTPUT_LCD);
 
 	ct->controller_state = CONTROLLER_STATE_ON;
-
-	if ( display_changed ) {
-		omap2_disp_handle_lpr_auto_mode();
-	}
 
 	/* If this is the first time we enable the display, we set LPR AUTO
 	 * mode.
@@ -1396,6 +1367,8 @@ static void lcd_controller_enable(struct omap_lcd_controller *ct)
 		omap2_disp_lpr_set_mode(DISPLAY_LPR_MODE_AUTO);
 		lpr_auto_enabled_at_boot = 1;
 	}
+
+	omap2_disp_handle_lpr_auto_mode();
 
 	/* Re-enable IRQ for sync lost handler here. See notes in
 	 * lcd_controller_disable().
@@ -1434,9 +1407,6 @@ static void lcd_controller_disable(struct omap_lcd_controller *ct)
 		ct->sdi_power_enable(0);
 	}
 #endif
-	/* Save state of video layers. */
-	ct->video1_was_on = omap2_disp_is_video_layer_enabled(OMAP2_VIDEO1);
-	ct->video2_was_on = omap2_disp_is_video_layer_enabled(OMAP2_VIDEO2);
 
 	omap2_disp_disable_layer(OMAP2_GRAPHICS);
 	omap2_disp_disable_output_dev(OMAP2_OUTPUT_LCD);
@@ -1501,6 +1471,7 @@ static int __init lcd_controller_probe(struct platform_device *pdev)
 		ret = -EINVAL;
 		goto err1;
 	}
+	localct = ct;
 
 	ct->panel_info         = ctrl_plat->screen_info;
 	ct->dss_config_lpr_on  = ctrl_plat->dss_config_lpr_on;
@@ -1572,6 +1543,15 @@ static int __init lcd_controller_probe(struct platform_device *pdev)
 	 * don't have to do anything here. Just mark the state as ON.
 	 */
 	ct->controller_state = CONTROLLER_STATE_ON;
+
+	omap2_disp_get_dss();
+
+	omap2_disp_set_panel_size(OMAP2_OUTPUT_LCD,
+					ct->panel_info.xres,
+					ct->panel_info.yres);
+
+	omap2_disp_put_dss();
+
 #else
 	/* Display has not yet been initialized. We need to initialize here.
 	 */
@@ -1621,8 +1601,6 @@ static int __init lcd_controller_probe(struct platform_device *pdev)
 
 	ct->controller_state = CONTROLLER_STATE_OFF;
 #endif
-	ct->video1_was_on = 0;
-	ct->video2_was_on = 0;
 
 	mutex_init(&ct->lock);
 

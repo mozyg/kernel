@@ -71,13 +71,14 @@
 #define DEFAULT_RSENSE 20
 #define DEFAULT_FULL40 0x0ECA
 
-#define SIGN_EXTEND16(x)		((x)-(((x)&0x8000)?65536:0))
-#define CURRENT_VALUE(x,rsense)		((SIGN_EXTEND16(x)*3125)/2/rsense) // in uA 
+#define SIGN_EXTEND16(x)		(((s32)(x))-(((x)&0x8000)?65536:0))
+#define CURRENT_VALUE(x,rsense)	((SIGN_EXTEND16(x)*3125)/2/rsense) // in uA 
 #define VOLTAGE_VALUE(x)		(4880*((x)>>5)) // in micro volt
-#define COULOMB_VALUE(x,rsense)	((6250*(x))/rsense)
-#define REG_COULOMB_VALUE(x,rsense)	((rsense*(x))/6250)
+#define COULOMB_VALUE(x,rsense)	((6250*SIGN_EXTEND16(x))/((s32) rsense))
+#define REG_COULOMB_VALUE(x,rsense)	((rsense*SIGN_EXTEND16(x))/6250)
 
-#define CAPACITY_VALUE(x)		(1600*(x))      // in micro Ahr
+#define CAPACITY_VALUE(x)		(1600*SIGN_EXTEND16(x))      // in micro Ahr
+#define CAPACITY_VALUE_MA(x)		((1000*SIGN_EXTEND16(x))/625)      // in m Ahr
 #define CAPACITY_PERCENT(x)		(392*x)		// in thousands of %
 
 // #define DS2784_DEBUG 1
@@ -390,7 +391,7 @@ static ssize_t show_ds2784_full40(struct device *dev,
 	int count;
 	u32 full40;
 
-	full40 = ((data->full40 * 25) >> 2) * data->rsense  ;
+	full40 = ((((u32)data->full40 ) *  25000L) >> 2) / data->rsense  ;
 
 	count = snprintf(buf, PAGE_SIZE, "%d.%03d\n", full40/1000, full40%1000);
 
@@ -670,6 +671,7 @@ static ssize_t show_ds2784_coulomb(struct device *dev,
 {
 	int count = 0;
 	u16 cur;
+	s32 cap;
 
 	static struct ds2784_cmd cmdlist[] = {
 		{
@@ -690,11 +692,13 @@ static ssize_t show_ds2784_coulomb(struct device *dev,
 		return count;
 	}
 
+	// Ds2784 returns in units of 1.6mAh
 	cur = (cmdlist[0].data << 8) | cmdlist[1].data;
+	cap = CAPACITY_VALUE(cur);   
 
-	count = snprintf(buf, PAGE_SIZE, "%d\n", cur);
+	count = snprintf(buf, PAGE_SIZE, "%d.%03d\n", cap/1000, (u32)(cap%1000));
 
-	DPRINTK("Coulomb : %d uAh\n", cur);
+	DPRINTK("Coulomb : %d uAh\n", cap);
 
 	return count;
 }
@@ -710,6 +714,7 @@ static ssize_t show_ds2784_capacity(struct device *dev,
 	int count = 0;
 	u32 cur;
 	u32 cap;
+	u32 age;
 
 	static struct ds2784_cmd cmdlist[] = {
 		{
@@ -722,6 +727,11 @@ static ssize_t show_ds2784_capacity(struct device *dev,
 			.cmd_continue = true,
 			.reg = DS2784_REG_FULL_LSB,
 		},
+		{
+			.cmd = DS2784_READ_DATA_CMD,
+			.reg = DS2784_REG_AS,
+			.cmd_continue = false,
+		},
 	};
 
 	if ( W1_DEVICE_PRESENT !=
@@ -731,8 +741,14 @@ static ssize_t show_ds2784_capacity(struct device *dev,
 	}
 
 	cur = (cmdlist[0].data << 8) | cmdlist[1].data;
-	cap = (((( cur * data->full40 * 25) >> 17 ) * data->rsense ) * 5 )/ 2 ;
+	cap = (((( cur * data->full40 * 25) >> 10) *1000)>>7 ) / data->rsense   ;
+	DPRINTK("raw capacity %d.%03d\n", cap/1000, cap%1000);
+
+	age = cmdlist[2].data * 25;  
+	DPRINTK("age  %d.%03d\n", (age >> 5) , (((age & 0x1f) * 1000)>>5));
  
+	cap = (( cap * age ) >> 5) /100;
+
 	count = snprintf(buf, PAGE_SIZE, "%d.%03d\n", cap/1000, cap%1000);
 
 	DPRINTK("capacity : %d uAh\n", cap);
@@ -752,6 +768,7 @@ static ssize_t show_ds2784_raw_coulomb(struct device *dev,
 	struct w1_ds2764_driver_data *data = dev_get_drvdata (dev);
 	int count = 0;
 	u16 cur;
+	s32 cou;
 
 	static struct ds2784_cmd cmdlist[] = {
 		{
@@ -773,8 +790,9 @@ static ssize_t show_ds2784_raw_coulomb(struct device *dev,
 	}
 
 	cur = (cmdlist[0].data << 8) | cmdlist[1].data;
+	cou= COULOMB_VALUE(cur,data->rsense);
 
-	count = snprintf(buf, PAGE_SIZE, "%d\n", COULOMB_VALUE(cur,data->rsense));
+	count = snprintf(buf, PAGE_SIZE, "%d.%03d\n", cou/1000, ((cou>=0)? cou:-cou)%1000); 
 
 	DPRINTK("Raw Coulomb : %d uAh\n", COULOMB_VALUE(cur,data->rsense));
 

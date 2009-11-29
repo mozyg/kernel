@@ -209,8 +209,9 @@ int
 omap34xx_isp_videobuf_init(struct omap34xx_v4l2_device *dev,
 				struct videobuf_buffer *qbuf)
 {
-	int rc = 0;
-	struct omap34xx_dma_block *block = videobuf_to_block(qbuf);
+	int rc = -ENOMEM;
+	dma_addr_t addr = 0;
+	struct omap34xx_videobuf *vbuf = get_omap34xx_buf(qbuf);
 	struct omap34xx_isp_buffer *buf;
 
 	buf = container_of(qbuf, struct omap34xx_isp_buffer, qbuf);
@@ -218,9 +219,22 @@ omap34xx_isp_videobuf_init(struct omap34xx_v4l2_device *dev,
 	SPEW(1, "+++ %s\n", __func__);
 
 	/* TODO: use ERR_PTR */
-	if (!(buf->addr = omap34xx_isp_mmu_map(block->dev_addr, block->size)))
-		rc = -ENOMEM;
+	if (vbuf->dev_addr) {
+		if (!(addr = omap34xx_isp_mmu_map(vbuf->dev_addr,
+							qbuf->bsize)))
+			goto exit;
+	}
+	else if (vbuf->sg_list) {
+		if (!(addr = omap34xx_isp_mmu_map_sg(vbuf->sg_list,
+							vbuf->nr_pages)))
+			goto exit;
+	}
+	else
+		BUG();
 
+	buf->addr = addr;
+	rc = 0;
+exit:
 	SPEW(1, "%s: index=%d isp=0x%08X rc=%d\n", __func__, qbuf->i,
 		buf->addr, rc);
 

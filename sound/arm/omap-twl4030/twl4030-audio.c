@@ -237,6 +237,26 @@ int twl4030_audio_codec_phonecall_enable(int enable)
 	return twl4030_audio_codec_enable( enable );
 }
 
+static int twl4030_audio_audio_capture_enable(void)
+{
+	u8 cos;
+	int time = 1;
+
+	/* Anti-pop for microphone */
+	twl4030_audio_bit_set(REG_ANAMICL, BIT_ANAMICL_OFFSET_CNCL_SEL_M);
+	twl4030_audio_bit_set(REG_ANAMICL, BIT_ANAMICL_CNCL_OFFSET_START_M);
+
+	while (time <= 256) {
+		twl4030_audio_read(REG_ANAMICL, &cos);
+		if ((cos & BIT_ANAMICL_CNCL_OFFSET_START_M) == 0)
+		    break;
+		msleep(time);
+		time <<= 1;
+	}
+
+	return 0;
+}
+
 static int twl4030_audio_audio_suspend(void)
 {
 	printk(KERN_INFO "%s: suspending codec\n", __FUNCTION__);
@@ -386,13 +406,14 @@ static int twl4030_audio_mixer_init(struct snd_card *card);
 static int twl4030_audio_audio_mute(bool mute);
 
 static struct omap_alsa_codec_ops twl4030_audio_ops = {
-	.probe      = twl4030_audio_probe,
-	.mixer_init = twl4030_audio_mixer_init,
-	.configure  = twl4030_audio_audio_configure,
-	.enable     = twl4030_audio_audio_enable,
-	.suspend    = twl4030_audio_audio_suspend,
-	.resume     = twl4030_audio_audio_resume,
-	.mute       = twl4030_audio_audio_mute,
+	.probe      	= twl4030_audio_probe,
+	.mixer_init 	= twl4030_audio_mixer_init,
+	.configure  	= twl4030_audio_audio_configure,
+	.enable     	= twl4030_audio_audio_enable,
+	.capture_enable = twl4030_audio_audio_capture_enable,
+	.suspend    	= twl4030_audio_audio_suspend,
+	.resume     	= twl4030_audio_audio_resume,
+	.mute       	= twl4030_audio_audio_mute,
 };
 
 inline struct omap_alsa_codec_ops *twl4030_audio_get_codec_ops(void)

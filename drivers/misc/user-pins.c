@@ -192,6 +192,11 @@ pin_show_level ( struct pin_attribute *attr, char  *buf)
 /*
  *  Set level for specified pin
  */
+#ifdef CONFIG_MODEM_POWER_ON_NOTIFY
+RAW_NOTIFIER_HEAD(modem_power_on_notifier_list);
+EXPORT_SYMBOL(modem_power_on_notifier_list);
+#endif
+
 static ssize_t 
 pin_store_level( struct pin_attribute *attr, const char * buf, size_t count)
 {
@@ -232,6 +237,11 @@ pin_store_level( struct pin_attribute *attr, const char * buf, size_t count)
 
 set:
 	PDBG ("set: gpio[%d] = %d\n", pin->gpio, val );
+#ifdef CONFIG_MODEM_POWER_ON_NOTIFY
+	if (pin->gpio == MODEM_POWER_ON_GPIO)
+		raw_notifier_call_chain(&modem_power_on_notifier_list,
+					val, NULL);
+#endif
 	gpio_set_value ( pin->gpio, val );
 	return count;
 }

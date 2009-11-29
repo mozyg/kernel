@@ -132,6 +132,13 @@ config HIBERNATION_SMP_POSSIBLE
 	depends on SMP
 	default y
 
+config FASTPATH
+	bool "Critical Battery Check"
+	depends on BATTERY_SIMPLE
+	---help---
+	  Uses the RTC to schedule periodic fast wakeup from sleep to
+	  check for critical batttery levels.
+
 config HIBERNATION
 	bool "Hibernation (aka 'suspend to disk')"
 	depends on PM && SWAP

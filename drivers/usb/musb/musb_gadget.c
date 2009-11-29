@@ -43,10 +43,6 @@
 #include <linux/stat.h>
 #include <linux/dma-mapping.h>
 
-#ifdef CONFIG_USB_GADGET_EVENT
-#include <linux/usb/gadget_event.h>
-#endif // CONFIG_USB_GADGET_EVENT
-
 #define BUGFIX
 
 #include "musb_core.h"
@@ -1617,10 +1613,6 @@ static int musb_gadget_vbus_draw(struct usb_gadget *gadget, unsigned mA)
 {
 	struct musb	*musb = gadget_to_musb(gadget);
 
-#ifdef CONFIG_USB_GADGET_EVENT
-	usb_gadget_event_vbus_draw(mA);
-#endif // !CONFIG_USB_GADGET_EVENT
-
 	if (!musb->xceiv.set_power)
 		return -EOPNOTSUPP;
 	return otg_set_power(&musb->xceiv, mA);
@@ -1918,15 +1910,10 @@ int usb_gadget_register_driver(struct usb_gadget_driver *driver)
 #endif
 	}
 
-#ifdef CONFIG_USB_GADGET_EVENT
 	if (retval == 0) {
-		/* need this for wall charger. */
+		/* REVISIT need this for wall charger. */
 		musb_pullup(musb, 1);
-		// Pull-up attached, enable USB gadget_event.
-		usb_gadget_event_bind((void*)&musb->g);
-		usb_gadget_event_enable(1);
 	}
-#endif // CONFIG_USB_GADGET_EVENT
 
 	return retval;
 }
@@ -2032,14 +2019,6 @@ int usb_gadget_unregister_driver(struct usb_gadget_driver *driver)
 	} else
 		retval = -EINVAL;
 	spin_unlock_irqrestore(&musb->lock, flags);
-
-#ifdef CONFIG_USB_GADGET_EVENT
-	// D+ pull-up detached, disable USB gadget_event.
-	if (retval == 0) {
-		usb_gadget_event_enable(0);
-		usb_gadget_event_unbind();
-	}
-#endif // CONFIG_USB_GADGET_EVENT
 
 	if (is_otg_enabled(musb) && retval == 0) {
 		usb_remove_hcd(musb_to_hcd(musb));

@@ -346,11 +346,19 @@ static int omap_mcbsp_alsa_pcm_open(struct snd_pcm_substream *ss)
 
 	LTRACE_ENTRY;
 
+	/* Enable codec */
+	if (chip->c_ops && chip->usage_cnt == 0 && chip->c_ops->enable) {
+		chip->c_ops->enable(true);
+	}
+
 	chip->as[stream_id].ss = ss;
 	if (stream_id == SNDRV_PCM_STREAM_PLAYBACK) {
 		runtime->hw = *(chip->hw_playback);
 	} else {
 		runtime->hw = *(chip->hw_capture);
+		if (chip->c_ops && chip->c_ops->capture_enable) {
+			chip->c_ops->capture_enable();
+		}
 	}
 
 	/* Apply the HW constraints */
@@ -405,7 +413,7 @@ static int omap_mcbsp_alsa_pcm_close(struct snd_pcm_substream *ss)
 		omap2_mcbsp_release_interface(chip->mcbsp->mcbsp_id);
 		chip->mcbsp->acquired = false;
 
-		if (chip->c_ops) {
+		if (chip->c_ops && chip->c_ops->enable) {
 			chip->c_ops->enable(false);
 		}
 
@@ -543,7 +551,7 @@ static int omap_mcbsp_alsa_pcm_prepare(struct snd_pcm_substream *ss)
 
 	if (!chip->configured) {
 		/* Configure codec */
-		if (chip->c_ops) {
+		if (chip->c_ops && chip->c_ops->configure) {
 			chip->c_ops->configure(chip->sample_rate, chip->data_width,
 					chip->channels);
 		}
@@ -552,11 +560,6 @@ static int omap_mcbsp_alsa_pcm_prepare(struct snd_pcm_substream *ss)
 		r = omap_mcbsp_alsa_pcm_mcbsp_configure(chip);
 		if (unlikely(r)) {
 			return r;
-		}
-
-		/* Enable codec */
-		if (chip->c_ops) {
-			chip->c_ops->enable(true);
 		}
 
 		chip->configured = true;
@@ -597,7 +600,7 @@ static int omap_mcbsp_alsa_pcm_trigger(struct snd_pcm_substream *ss, int cmd)
 			omap_mcbsp_alsa_process_dma(as);
 			/* Queue one more DMA to get rid of popping noise */
 			omap_mcbsp_alsa_process_dma(as);
-			if ( chip->c_ops && chip->c_ops->mute ) {/* currently only defined in twl4030-i2s */
+			if (chip->c_ops && chip->c_ops->mute && as->stream_id == SNDRV_PCM_STREAM_PLAYBACK) {/* currently only defined in twl4030-i2s */
 				chip->c_ops->mute(false);
 			}
 			break;
@@ -816,7 +819,7 @@ static int omap_mcbsp_alsa_drv_probe(struct platform_device *pdev)
 		platform_set_drvdata(pdev, card);
 
 		/* init mixer */
-		if (c_ops) {
+		if (c_ops && c_ops->mixer_init) {
 			c_ops->mixer_init(card);
 		}
 	}

@@ -285,6 +285,7 @@ PTE_BIT_FUNC(mkyoung,   |= L_PTE_YOUNG);
  */
 #define pgprot_noncached(prot)	__pgprot(pgprot_val(prot) & ~(L_PTE_CACHEABLE | L_PTE_BUFFERABLE))
 #define pgprot_writecombine(prot) __pgprot(pgprot_val(prot) & ~L_PTE_CACHEABLE)
+#define pgprot_writethrough(prot) __pgprot(pgprot_val(prot) & ~L_PTE_BUFFERABLE)
 
 #define pmd_none(pmd)		(!pmd_val(pmd))
 #define pmd_present(pmd)	(pmd_val(pmd))

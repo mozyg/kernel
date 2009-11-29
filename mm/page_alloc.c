@@ -52,6 +52,7 @@
 #include <asm/div64.h>
 #include "internal.h"
 
+
 /*
  * Array of node states.
  */
@@ -439,6 +440,9 @@ static inline void __free_one_page(struct page *page,
 			break;		/* Move the buddy up one level. */
 
 		list_del(&buddy->lru);
+#ifdef CONFIG_DEBUG_FREE_PAGE_LIST_PALM
+		buddy->lru.magic = LIST_DEBUG_MAGIC_NOT_IN_FREE_LIST;
+#endif
 		zone->free_area[order].nr_free--;
 		rmv_page_order(buddy);
 		combined_idx = __find_combined_index(page_idx, order);
@@ -449,6 +453,9 @@ static inline void __free_one_page(struct page *page,
 	set_page_order(page, order);
 	list_add(&page->lru,
 		&zone->free_area[order].free_list[migratetype]);
+#ifdef CONFIG_DEBUG_FREE_PAGE_LIST_PALM
+	page->lru.magic = LIST_DEBUG_MAGIC_IN_FREE_LIST;
+#endif
 	zone->free_area[order].nr_free++;
 }
 
@@ -502,6 +509,9 @@ static void free_pages_bulk(struct zone *zone, int count,
 		page = list_entry(list->prev, struct page, lru);
 		/* have to delete it as __free_one_page list manipulates */
 		list_del(&page->lru);
+#ifdef CONFIG_DEBUG_FREE_PAGE_LIST_PALM
+		page->lru.magic = LIST_DEBUG_MAGIC_NOT_IN_FREE_LIST;
+#endif
 		__free_one_page(page, zone, order);
 	}
 	spin_unlock(&zone->lock);
@@ -593,6 +603,9 @@ static inline void expand(struct zone *zone, struct page *page,
 		size >>= 1;
 		VM_BUG_ON(bad_range(zone, &page[size]));
 		list_add(&page[size].lru, &area->free_list[migratetype]);
+#ifdef CONFIG_DEBUG_FREE_PAGE_LIST_PALM
+		page[size].lru.magic = LIST_DEBUG_MAGIC_IN_FREE_LIST;
+#endif
 		area->nr_free++;
 		set_page_order(&page[size], high);
 	}
@@ -664,6 +677,9 @@ static struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
 		page = list_entry(area->free_list[migratetype].next,
 							struct page, lru);
 		list_del(&page->lru);
+#ifdef CONFIG_DEBUG_FREE_PAGE_LIST_PALM
+		page->lru.magic = LIST_DEBUG_MAGIC_NOT_IN_FREE_LIST;
+#endif
 		rmv_page_order(page);
 		area->nr_free--;
 		__mod_zone_page_state(zone, NR_FREE_PAGES, - (1UL << order));
@@ -723,8 +739,14 @@ int move_freepages(struct zone *zone,
 
 		order = page_order(page);
 		list_del(&page->lru);
+#ifdef CONFIG_DEBUG_FREE_PAGE_LIST_PALM
+		page->lru.magic = LIST_DEBUG_MAGIC_NOT_IN_FREE_LIST;
+#endif
 		list_add(&page->lru,
 			&zone->free_area[order].free_list[migratetype]);
+#ifdef CONFIG_DEBUG_FREE_PAGE_LIST_PALM
+		page->lru.magic = LIST_DEBUG_MAGIC_IN_FREE_LIST;
+#endif
 		page += 1 << order;
 		pages_moved += 1 << order;
 	}
@@ -801,6 +823,9 @@ static struct page *__rmqueue_fallback(struct zone *zone, int order,
 
 			/* Remove the page from the freelists */
 			list_del(&page->lru);
+#ifdef CONFIG_DEBUG_FREE_PAGE_LIST_PALM
+			page->lru.magic = LIST_DEBUG_MAGIC_NOT_IN_FREE_LIST;
+#endif
 			rmv_page_order(page);
 			__mod_zone_page_state(zone, NR_FREE_PAGES,
 							-(1UL << order));
@@ -1009,6 +1034,9 @@ static void fastcall free_hot_cold_page(struct page *page, int cold)
 	local_irq_save(flags);
 	__count_vm_event(PGFREE);
 	list_add(&page->lru, &pcp->list);
+#ifdef CONFIG_DEBUG_FREE_PAGE_LIST_PALM
+	page->lru.magic = LIST_DEBUG_MAGIC_IN_FREE_LIST;
+#endif
 	set_page_private(page, get_pageblock_migratetype(page));
 	pcp->count++;
 	if (pcp->count >= pcp->high) {
@@ -1088,6 +1116,9 @@ again:
 		}
 
 		list_del(&page->lru);
+#ifdef CONFIG_DEBUG_FREE_PAGE_LIST_PALM
+		page->lru.magic = LIST_DEBUG_MAGIC_NOT_IN_FREE_LIST;
+#endif
 		pcp->count--;
 	} else {
 		spin_lock_irqsave(&zone->lock, flags);
@@ -4541,6 +4572,9 @@ __offline_isolated_pages(unsigned long start_pfn, unsigned long end_pfn)
 		       pfn, 1 << order, end_pfn);
 #endif
 		list_del(&page->lru);
+#ifdef CONFIG_DEBUG_FREE_PAGE_LIST_PALM
+		page->lru.magic = LIST_DEBUG_MAGIC_NOT_IN_FREE_LIST;
+#endif
 		rmv_page_order(page);
 		zone->free_area[order].nr_free--;
 		__mod_zone_page_state(zone, NR_FREE_PAGES,

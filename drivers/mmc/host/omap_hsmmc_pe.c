@@ -788,6 +788,7 @@ omap_mmc_handle_cmd_error ( struct mmc_omap_host *host, u32 stat )
 		        "CMD%d: CIE/CEB error\n", host->mrq->cmd->opcode );
 		goto done;
 	}
+	
 	return 0;
 done:
 	omap_hsmmc_reset_cmd_fsm ( host );
@@ -1148,6 +1149,30 @@ omap_mmc_cmd_done(struct mmc_omap_host *host, struct mmc_command *cmd)
 		} else {
 			/* response types 1, 1b, 3, 4, 5, 6 */
 			cmd->resp[0] = omap_hsmmc_read(host, HSMMC_RSP10);
+
+			if( cmd->opcode == MMC_WRITE_BLOCK ||
+				cmd->opcode == MMC_WRITE_MULTIPLE_BLOCK ||
+				cmd->opcode == MMC_READ_SINGLE_BLOCK ||
+				cmd->opcode == MMC_READ_MULTIPLE_BLOCK ||
+				cmd->opcode == MMC_STOP_TRANSMISSION ||
+				cmd->opcode == MMC_SEND_STATUS ) {
+				if( cmd->resp[0] & 0x80000000 ) {
+					printk( "MMC_CMD%d failed 0x%08x\n",
+					        cmd->opcode, cmd->resp[0] );
+				}
+				if( cmd->resp[0] & 0x7fff0000 ) {
+					panic( "MMC_CMD%d failed 0x%08x\n",
+					        cmd->opcode, cmd->resp[0] );
+				}
+			} else {
+				if( cmd->opcode != MMC_SEND_OP_COND ) {
+					if( cmd->resp[0] & 0xFFFF0000 ) {
+						printk( "MMC_CMD%d RESP 0x%08x\n",
+							cmd->opcode, cmd->resp[0] );
+					}
+				}
+			}
+			
 		}
 	}
 

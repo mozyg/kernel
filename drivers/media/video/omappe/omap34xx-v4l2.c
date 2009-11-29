@@ -181,16 +181,15 @@ static int omap34xx_v4l2_videobuf_init(struct videobuf_queue *q,
 		goto exit;
 	}
 
-	if ((rc = videobuf_iolock(q, buf, NULL)))
+	if ((rc = omap34xx_videobuf_init(q, buf)))
 		goto exit;
 
-	if ((rc = dev->videobuf_init(dev, buf)))
+	if ((rc = dev->videobuf_init(dev, buf))) {
+		omap34xx_videobuf_release(q, buf);
 		goto exit;
+	}
 
 	buf->size = dev->videobuf_size(dev);
-	buf->state = STATE_PREPARED;
-	goto exit;
-
 exit:
 	SPEW(1, "--- %s: rc=%d size=%lu\n", __func__, rc, buf->size);
 
@@ -206,15 +205,16 @@ static int omap34xx_v4l2_videobuf_prepare(struct videobuf_queue *q,
 
 	SPEW(3, "+++ %s: index=%u state=%d\n", __func__, buf->i, buf->state);
 
-	if ((STATE_NEEDS_INIT == buf->state)
-		&& (rc = omap34xx_v4l2_videobuf_init(q, buf)))
-		goto exit;
-
-	if (buf->size < dev->videobuf_size(dev)) {
+	if (buf->bsize < dev->videobuf_size(dev)) {
 		rc = -EINVAL;
 		goto exit;
 	}
 
+	if ((STATE_NEEDS_INIT == buf->state)
+		&& (rc = omap34xx_v4l2_videobuf_init(q, buf)))
+		goto exit;
+
+	buf->state = STATE_PREPARED;
 	rc = 0;
 exit:
 	SPEW(3, "--- %s: rc=%d\n", __func__, rc);
@@ -263,6 +263,7 @@ static void omap34xx_v4l2_videobuf_release(struct videobuf_queue *q,
 
 	if (STATE_NEEDS_INIT != buf->state) {
 		dev->videobuf_release(dev, buf);
+		omap34xx_videobuf_release(q, buf);
 		buf->state = STATE_NEEDS_INIT;
 	}
 exit:

@@ -62,6 +62,11 @@ static struct {
 	struct omap_dss_config off;
 } lpr = { 0 };
 
+static struct {
+	int height;
+	int width;
+} lcd_panel_size = { 0 };
+
 void omap2_disp_handle_lpr_auto_mode(void);
 static void omap2_disp_set_fifo_thresholds(void);
 static void omap2_disp_set_logic_dividers(void);
@@ -197,10 +202,12 @@ static void set_colorconv(int v, int colorspace)
 	unsigned long ccreg;
 	s16 mtx[3][3];
 	int i, j;
-	for (i = 0; i < 3; i++)
+
+	for (i = 0; i < 3; i++) {
 		for (j = 0; j < 3; j++) {
 			mtx[i][j] = current_colorconv_values[v][i][j];
 		}
+	}
 
 	ccreg = (mtx[0][0] & 0x7ff) | ((mtx[0][1] & 0x7ff) << 16);
 	dispc_reg_out(DISPC_VID_CONV_COEF0(v), ccreg);
@@ -217,6 +224,12 @@ static void set_colorconv(int v, int colorspace)
 	    || colorspace == V4L2_COLORSPACE_SRGB) {
 		dispc_reg_merge(DISPC_VID_ATTRIBUTES(v),
 				DISPC_VID_ATTRIBUTES_VIDFULLRANGE,
+				DISPC_VID_ATTRIBUTES_VIDFULLRANGE);
+	}
+	else
+	{
+		dispc_reg_merge(DISPC_VID_ATTRIBUTES(v),
+				0,
 				DISPC_VID_ATTRIBUTES_VIDFULLRANGE);
 	}
 }
@@ -343,10 +356,20 @@ void omap2_disp_get_panel_size(int output_dev, int *width, int *height)
 		*height = *height << 1;
 	} else if (output_dev == OMAP2_OUTPUT_LCD) {
 		size = dispc_reg_in(DISPC_SIZE_LCD);
-		*width = 1 + ((size & DISPC_SIZE_LCD_PPL)
-			      >> DISPC_SIZE_LCD_PPL_SHIFT);
-		*height = 1 + ((size & DISPC_SIZE_LCD_LPP)
+		if (lcd_panel_size.width == 0) {
+			*width = 1 + ((size & DISPC_SIZE_LCD_PPL)
+					  >> DISPC_SIZE_LCD_PPL_SHIFT);
+		}
+		else {
+			*width = lcd_panel_size.width;
+		}
+		if (lcd_panel_size.height == 0) {
+			*height = 1 + ((size & DISPC_SIZE_LCD_LPP)
 			       >> DISPC_SIZE_LCD_LPP_SHIFT);
+		}
+		else {
+			*height = lcd_panel_size.height;
+		}
 	}
 }
 void omap2_disp_set_panel_size(int output_dev, int width, int height)
@@ -368,6 +391,8 @@ void omap2_disp_set_panel_size(int output_dev, int width, int height)
 		size |= ((height - 1) << DISPC_SIZE_LCD_LPP_SHIFT)
 		    & DISPC_SIZE_LCD_LPP;
 		dispc_reg_out(DISPC_SIZE_LCD, size);
+		lcd_panel_size.width = width;
+		lcd_panel_size.height = height;
 	}
 }
 
@@ -3480,6 +3505,9 @@ err_get_clks:
 
 void omap2_disp_hack_synclost_irq_enable(void)
 {
+	dispc_reg_out(DISPC_IRQSTATUS, DISPC_IRQSTATUS_SYNCLOST | DISPC_IRQSTATUS_OCPERROR |
+					DISPC_IRQSTATUS_GFXFIFOUNDERFLOW);
+
 	omap2_disp_irqenable(omap2_synclost_isr,
 			DISPC_IRQSTATUS_SYNCLOST | DISPC_IRQSTATUS_OCPERROR |
 					DISPC_IRQSTATUS_GFXFIFOUNDERFLOW);

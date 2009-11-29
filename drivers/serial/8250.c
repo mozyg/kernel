@@ -1575,13 +1575,13 @@ static irqreturn_t serial8250_interrupt(int irq, void *dev_id)
 			printk(KERN_ERR "serial8250: too much work for "
 				"irq%d\n", irq);
 #ifdef CONFIG_ARCH_OMAP34XX
-			printk(KERN_ERR "iir = %02x (%02x)\n", (int)iir, (int)serial_in(up, UART_IIR));
-			printk(KERN_ERR "ier = %02x\n", (int)serial_in(up, UART_IER));
-			printk(KERN_ERR "lcr = %02x\n", (int)serial_in(up, UART_LCR));
-			printk(KERN_ERR "lsr = %02x\n", (int)serial_in(up, UART_LSR));
-			printk(KERN_ERR "mcr = %02x\n", (int)serial_in(up, UART_MCR));
-			printk(KERN_ERR "scr = %02x\n", (int)serial_in(up, UART_OMAP_SCR));
-			printk(KERN_ERR "ssr = %02x\n", (int)serial_in(up, UART_OMAP_SSR));
+			printk(KERN_ERR "iir = %x (%x)\n", (int)iir, (int)serial_in(up, UART_IIR));
+			printk(KERN_ERR "ier = %x\n", (int)serial_in(up, UART_IER));
+			printk(KERN_ERR "lcr = %x\n", (int)serial_in(up, UART_LCR));
+			printk(KERN_ERR "lsr = %x\n", (int)serial_in(up, UART_LSR));
+			printk(KERN_ERR "mcr = %x\n", (int)serial_in(up, UART_MCR));
+			printk(KERN_ERR "scr = %x\n", (int)serial_in(up, UART_OMAP_SCR));
+			printk(KERN_ERR "ssr = %x\n", (int)serial_in(up, UART_OMAP_SSR));
 			panic (KERN_ERR "serial8250: too much work for "
 				"irq%d\n", irq);
 #endif				

@@ -181,11 +181,11 @@ int suspend_devices_and_enter(suspend_state_t state)
 	enable_nonboot_cpus();
 	if (suspend_ops->finish) {
 		suspend_ops->finish();
-
-		if (suspend_ops->fastsleep && suspend_ops->fastsleep()) {
-			goto Prepare_suspend;
-		}
     }
+	if (suspend_ops->fastsleep && suspend_ops->fastsleep()) {
+		goto Prepare_suspend;
+	}
+
  Resume_devices:
 	device_resume();
  Resume_console:

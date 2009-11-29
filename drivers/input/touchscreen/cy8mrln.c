@@ -89,19 +89,20 @@
 #define  SCAN_TIMEOUT_USEC	500000
 #define  SCAN_TIMEOUT_JIFFY	(HZ/2)
 
-/* It takes roughly 1.5 second for PSoC to finish power up
- * calibration. With new firmware that supports loading of
- * saved calibration data (static calibration), we will
- * get an interrupt each time when we power up. This
- * time out is for safey and for older firmware that
- * doesn't support power up interrupt. We will also use
- * this macro for power cycle delay at the end of firmware
- * update procedure.
- * After flashing the IDAC calibration phase may take up to 
- * 5 seconds therefore timeout is set at 10 seconds.
+/* Normal power-up takes a maximum of 50ms after which the
+*  PSoC will be ready to accept commands
  */
-#define  POWER_UP_TIMEOUT_JIFFY	(10*HZ)
-#define  POWER_UP_TIMEOUT_MSEC  10000
+#define  NORMAL_POWER_UP_TIMEOUT_MSEC  50
+#define  NORMAL_POWER_UP_TIMEOUT_JIFFY	(NORMAL_POWER_UP_TIMEOUT_MSEC*HZ/1000)
+
+/* Post programming power-up can take up to 5 seconds since
+* the IDAC must be calibrated.  We double that and take 10s 
+* just to be sure.  Programming takes 20 to 30 seconds anway 
+* so the extra 5 seconds seems acceptable.
+*/
+#define  POST_PROG_POWER_UP_TIMEOUT_MSEC  10000
+#define  POST_PROG_POWER_UP_TIMEOUT_JIFFY (POST_PROG_POWER_UP_TIMEOUT_MSEC*HZ/1000)
+
 
 /* Timer setup overhead. It was measured just before the
  * hrtimer setup and again upon receiving of the timer exp
@@ -168,7 +169,6 @@ enum {
 	VERSION_ACQUIRED,
 	INTR_HANDLED,
 	SCAN_TIMEOUT,
-	IN_POWERUP,
 	IN_QUICK_NAP,
 	IDAC_CALIBRATED,
 	IDAC_CALIBRATION_STORED,
@@ -1121,12 +1121,8 @@ cy8mrln_work_handler(struct work_struct *work)
 	/* get device */
 	dev = container_of(work, struct tsc_drv_data, workq);
 
-	/* Handle power up interrupt. */
-	if (test_and_clear_bit(IN_POWERUP, dev->flags)) {
-		wake_up_interruptible(&dev->powerup_wait);
-
 	/* Handle scan done interrupt. */
-	} else if (dev->read_option >= CY8MRLN_ONE_INT_THREE_SETUP_BYTES) { 
+	if (dev->read_option >= CY8MRLN_ONE_INT_THREE_SETUP_BYTES) { 
 		cy8mrln_work_handler_new(work);
 	} else {
 		cy8mrln_work_handler_old(work);
@@ -1247,55 +1243,33 @@ cy8mrln_irq(int irq, void *dev_id )
 
 /* Power up the PSoC. */
 static int 
-cy8mrln_do_poweron(struct tsc_drv_data *dev)
+cy8mrln_do_poweron(struct tsc_drv_data *dev, unsigned long start_up_delay)
 {
 	int rc = 0;
 
-	long timeout = POWER_UP_TIMEOUT_JIFFY;
-
-	#ifdef DO_MEASUREMENTS_
-		unsigned long tdiff, t0, t1;
-	#endif
 	dev->setup = 0;
 	/* Switch from GPIO mode. */
 	dev->pdata->switch_mode(NORM_OP);
-
 	/* Enable the VDD. */
 	gpio_set_value(dev->pdata->enable_gpio, 1);
 
-	/* Enable interrupt. */
-	cy8mrln_enable_irq(dev);
+	msleep(start_up_delay);
 
-	/* Either we get interrupt (post 11A firmware) or timeout (11A).
-	 */
-	set_bit(IN_POWERUP, dev->flags);
+	rc = request_irq(dev->spidev->irq, cy8mrln_irq, 
+			 IRQF_DISABLED | IRQF_TRIGGER_FALLING ,
+			 "touchscreen", dev );
 
-	#ifdef DO_MEASUREMENTS_
-		t0 = jiffies ;
-	#endif
-
-	timeout = wait_event_interruptible_timeout(dev->powerup_wait,
-			!test_bit(IN_POWERUP, dev->flags), timeout);
-
-	#ifdef DO_MEASUREMENTS_
-		t1 = jiffies ;
-		tdiff = (t1-t0)*1000/HZ ; // time lapsed in msec
-		printk("%s: t0: %ld; t1=%ld; Power-up takes %ld msec\n", DRIVER, t0, t1, tdiff) ;
-
-	#endif
-
-	clear_bit(IN_POWERUP, dev->flags);
-
-	/* Disable interrupt. */
-	cy8mrln_disable_irq(dev);
-
-	/* We received interrupt. */
-	if (timeout) {
-		/* Signal? */
-		if (signal_pending(current)) {
-			rc = -ERESTARTSYS;
-		}
+	if (rc != 0) {
+		printk(KERN_ERR "%s: Failed to get IRQ.\n", DRIVER);
+		goto err;
 	}
+
+	clear_bit(GPIO_IRQ_DISABLED, dev->flags);
+
+	cy8mrln_disable_irq(dev);
+	
+err:
+
 	return rc;
 }
 
@@ -1321,6 +1295,8 @@ static int
 cy8mrln_do_poweroff(struct tsc_drv_data *dev)
 {
 	dev->setup = 0;
+
+	free_irq(dev->spidev->irq, dev);
 
 	/* Cancel timers and work queues. */
 	cy8mrln_do_cleanup(dev);
@@ -1368,15 +1344,8 @@ cy8mrln_do_resume(struct tsc_drv_data *dev)
 	/* Delay for pSoC*/
 	msleep(10);
 
-	/* Baseline Low setting */
-	regval = CY8MRLN_CONTROL_REG | dev->wot_baseline_lo ;
-	cy8mrln_reg_write( dev, regval, CY8MRLN_BASELINE_ADJUST);
-
-	/* Delay for pSoC*/
-	msleep(10);
-
-	/* Baseline High setting */
-	regval = CY8MRLN_CONTROL_REG | dev->wot_baseline_hi;
+	/* Baseline setting */
+	regval = CY8MRLN_CONTROL_REG | dev->wot_baseline_hi | dev->wot_baseline_lo << 8;
 	cy8mrln_reg_write( dev, regval,	CY8MRLN_BASELINE_ADJUST );
 
 	/* Flush read buffer to avoid stale leftover data */
@@ -1481,6 +1450,11 @@ cy8mrln_suspend(struct spi_device *spi, pm_message_t mesg)
 
 	PDBG("%s:\n", __FUNCTION__ );
 
+	if(dev->verbose) {
+		printk(KERN_INFO "cy8mrln: start suspending sleep_mode:%d saved_mode:%d suspended?:%d\n", dev->sleep_mode, dev->saved_mode, test_bit(SUSPENDED, dev->flags));
+	}
+
+
 	/* check if it is in use */
 	if (!test_and_set_bit(SUSPENDED, dev->flags)) {
 
@@ -1517,6 +1491,12 @@ cy8mrln_suspend(struct spi_device *spi, pm_message_t mesg)
 			break;
 		}
 	}
+
+	if(dev->verbose) {
+		printk(KERN_INFO "cy8mrln: done suspending sleep_mode:%d saved_mode:%d suspended?:%d\n", dev->sleep_mode, dev->saved_mode, test_bit(SUSPENDED, dev->flags));
+	}
+
+
 	return 0;
 }
 
@@ -1526,9 +1506,13 @@ cy8mrln_resume(struct spi_device *spi)
 {
 	struct tsc_drv_data *dev = spi_get_drvdata(spi);
 
+	if(dev->verbose) {
+		printk(KERN_INFO "cy8mrln: start resuming sleep_mode:%d saved_mode:%d suspended?:%d\n", dev->sleep_mode, dev->saved_mode, test_bit(SUSPENDED, dev->flags));
+	}
+
 	PDBG("%s:\n", __FUNCTION__ );
 	if (test_and_clear_bit(SUSPENDED, dev->flags)) {
-
+	
 		switch (dev->saved_mode) {
 			case CY8MRLN_ON_STATE:
 				//if (dev->sleep_mode == CY8MRLN_SLEEP_STATE) {
@@ -1537,7 +1521,7 @@ cy8mrln_resume(struct spi_device *spi)
 				//} else 
 				if (dev->sleep_mode == CY8MRLN_OFF_STATE) {
 					/* The PSoC was off. Power up */
-					cy8mrln_do_poweron(dev);
+					cy8mrln_do_poweron(dev, NORMAL_POWER_UP_TIMEOUT_MSEC);;
 					/* Restore the previous PSoC state by calling resume. */
 					cy8mrln_do_resume(dev);
 				} else {
@@ -1554,6 +1538,11 @@ cy8mrln_resume(struct spi_device *spi)
 		dev->sleep_mode = dev->saved_mode;
 	}
 end:
+	if(dev->verbose) {
+		printk(KERN_INFO "cy8mrln: done resuming sleep_mode:%d saved_mode:%d suspended?:%d\n", dev->sleep_mode, dev->saved_mode, test_bit(SUSPENDED, dev->flags));
+	}
+
+
 	return 0;
 }
 
@@ -2821,10 +2810,8 @@ static int cy8mrln_exit_prog(struct tsc_drv_data *dev)
 	dev->pdata->switch_mode(NORM_OP);
 
 	/* Supply the power to perform static calibration.
-	 * We will get an interrupt and exit from the do_poweron()
-	 * when it's done.
 	 */ 
-	cy8mrln_do_poweron(dev);
+	cy8mrln_do_poweron(dev, POST_PROG_POWER_UP_TIMEOUT_MSEC);
 
 	/* Turn off the power to wrap up. */
 	cy8mrln_do_poweroff(dev);
@@ -3369,11 +3356,11 @@ cy8mrln_ioctl(struct inode * inode, struct file *file,
 
 		case CY8MRLN_IOCTL_IDAC_CALIBRATE:
 		{
-			// Since most of the longer start up time
+			// Since most of the longer start up time post programming
 			// is due to IDAC calibration, we just use the 
 			// same timeout here.
-			long timeout = POWER_UP_TIMEOUT_JIFFY;
-
+			long timeout = POST_PROG_POWER_UP_TIMEOUT_JIFFY;
+	
 			/* Check if the PSoC is on. */
 			if (dev->sleep_mode != CY8MRLN_ON_STATE) {
 			rc = -EINVAL;
@@ -3542,7 +3529,6 @@ cy8mrln_ioctl(struct inode * inode, struct file *file,
 			clear_bit(VERSION_ACQUIRED, dev->flags);
 			cy8mrln_reg_write(dev, CY8MRLN_CONTROL_REG, CY8MRLN_QUERY);
 
-
 			/* Go to sleep until we get an interrupt. */
 			timeout = wait_event_interruptible_timeout(dev->version_wait,
 					test_bit(VERSION_ACQUIRED, dev->flags), timeout);
@@ -3683,11 +3669,10 @@ cy8mrln_ioctl(struct inode * inode, struct file *file,
 				goto Done;
 			}
 
-
 		
 			if (sleep_mode == CY8MRLN_ON_STATE) {
 				if (dev->sleep_mode == CY8MRLN_OFF_STATE) {
-					rc = cy8mrln_do_poweron(dev);
+					rc = cy8mrln_do_poweron(dev, NORMAL_POWER_UP_TIMEOUT_MSEC);
 					if (rc) {
 						goto Done;
 					}
@@ -3696,7 +3681,7 @@ cy8mrln_ioctl(struct inode * inode, struct file *file,
 
 			} else if (sleep_mode == CY8MRLN_SLEEP_STATE) {
 				if (dev->sleep_mode == CY8MRLN_OFF_STATE) {
-					rc = cy8mrln_do_poweron(dev);
+					rc = cy8mrln_do_poweron(dev, NORMAL_POWER_UP_TIMEOUT_MSEC);
 					if (rc) {
 						goto Done;
 					}
@@ -4022,7 +4007,6 @@ cy8mrln_remove(struct spi_device *spi)
 	device_remove_file(&(spi->dev), &dev_attr_tp_fw_ver);
 
 	/* free irq and gpio */
-	free_irq(spi->irq, dev);
 	gpio_free(irq_to_gpio(spi->irq));
 	gpio_free(dev->pdata->enable_gpio);
 
@@ -4160,14 +4144,6 @@ cy8mrln_probe(struct spi_device *spi)
 		goto err2;
 	}
 
-	rc = request_irq(spi->irq, cy8mrln_irq, 
-			 IRQF_DISABLED | IRQF_TRIGGER_FALLING,
-			 "touchscreen", dev );
-	if (rc != 0) {
-		printk(KERN_ERR "%s: Failed to get IRQ.\n", DRIVER);
-		goto err3;
-	}
-	cy8mrln_disable_irq(dev);
 	
 	/* Give touchscreen it's own workqueue */
 	dev->tp_wq = create_singlethread_workqueue("tp_wq");
@@ -4239,7 +4215,7 @@ cy8mrln_probe(struct spi_device *spi)
 	clear_bit(SUSPENDED, dev->flags);
 	clear_bit(IS_OPENED, dev->flags);
 	clear_bit(INTR_HANDLED, dev->flags);
-	clear_bit(IN_POWERUP, dev->flags);
+	set_bit(GPIO_IRQ_DISABLED, dev->flags);
 	//clear_bit(IN_QUICK_NAP, dev->flags);
 
 

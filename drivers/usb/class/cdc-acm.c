@@ -70,8 +70,7 @@
 #include <asm/unaligned.h>
 #include <linux/list.h>
 
-//#include <linux/serial.h>
-#include <linux/usb/passthru.h>
+#include <linux/serial.h>
 
 #include "cdc-acm.h"
 
@@ -110,6 +109,9 @@ static inline u32 get_unaligned_le32(const void *p)
 #define DRIVER_VERSION "v0.26"
 #define DRIVER_AUTHOR "Armin Fuerst, Pavel Machek, Johannes Erdfelt, Vojtech Pavlik, David Kubicek"
 #define DRIVER_DESC "USB Abstract Control Model driver for USB modems and ISDN adapters"
+
+/* #define TIOCMIWAIT   0x545C */
+/* #define TIOCGICOUNT  0x545D */
 
 static struct usb_driver acm_driver;
 static struct tty_driver *acm_tty_driver;
@@ -358,46 +360,6 @@ static ssize_t show_country_rel_date
 
 static DEVICE_ATTR(iCountryCodeRelDate, S_IRUGO, show_country_rel_date, NULL);
 
-static ssize_t show_passthru
-(struct device *dev, struct device_attribute *attr, char *buf)
-{
-	struct usb_interface *intf = to_usb_interface(dev);
-	struct acm *acm = usb_get_intfdata(intf);
-
-	return sprintf(buf, "%d\n", acm->passthru_mode);
-}
-
-static ssize_t store_passthru
-(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
-{
-	struct usb_interface *intf = to_usb_interface(dev);
-	struct acm *acm = usb_get_intfdata(intf);
-
-        ssize_t rc = count;
-        int i;
-
-	mutex_lock(&acm->mutex);
-	if (acm->used > 0) {
-		dev_err(&acm->data->dev, "failed to change passthru_mode\n");
-                rc = -EBUSY;
-		goto end;
-	}
-
-        if (sscanf(buf, "%d", &i) != 1) {
-                rc = -EINVAL;
-		goto end;
-	}
-
-        acm->passthru_mode = !!i;
-
-	dev_info(&acm->data->dev, "passthru_mode=%d\n", acm->passthru_mode);
-end:
-	mutex_unlock(&acm->mutex);
-        return rc;
-}
-
-static DEVICE_ATTR(passthru, S_IRUGO|S_IWUGO, show_passthru, store_passthru);
-
 static ssize_t show_wbs
 (struct device *dev, struct device_attribute *attr, char *buf)
 {
@@ -521,49 +483,6 @@ found:
 	}
 
 	data = (unsigned char *)(dr + 1);
-
-	if (acm->passthru_mode) {
-		struct acm_ne *notif_entry;
-
-		dev_info(&acm->data->dev,
-			 "%s: notification %#x received: index %d len %d data0=%#x data1=%#x\n",
-			 __func__, dr->bNotificationType, wIndex, wLength, data[0], data[1]);
-
-		spin_lock(&acm->notif_lock);
-		if (list_empty(&acm->spare_notif_entries)) {
-			printk(KERN_ERR "%s: spare notification list is empty\n", __func__);
-			spin_unlock(&acm->notif_lock);
-			goto exit;
-		}
-		notif_entry = list_entry(acm->spare_notif_entries.next, struct acm_ne, list);
-		list_del(&notif_entry->list);
-		spin_unlock(&acm->notif_lock);
-
-		notif_entry->notification.bmRequestType = dr->bmRequestType;
-		notif_entry->notification.bNotificationType = dr->bNotificationType;
-		notif_entry->notification.wValue = wValue;
-		notif_entry->notification.wIndex = wIndex;
-		notif_entry->notification.wLength = wLength;
-
-		if (wLength > PIOC_NOTIF_DATA_SIZE) {
-			printk(KERN_ERR "%s: notification datasize is too big (%d bytes)\n",
-			       __func__, wLength);
-			spin_lock(&acm->notif_lock);
-			list_add(&notif_entry->list, &acm->spare_notif_entries);
-			spin_unlock(&acm->notif_lock);
-			goto exit;
-		}
-		if (wLength > 0)
-			memcpy(notif_entry->notification.data, data, wLength);
-
-		spin_lock(&acm->notif_lock);
-		list_add_tail(&notif_entry->list, &acm->filled_notif_entries);
-		spin_unlock(&acm->notif_lock);
-
-		wake_up_interruptible(&acm->notif_wait);
-		goto exit;
-	}
-
 	switch (dr->bNotificationType) {
 
 		case USB_CDC_NOTIFY_NETWORK_CONNECTION:
@@ -585,6 +504,16 @@ found:
 				dev_info(&acm->data->dev, "DCD dropped. calling tty_hangup\n");
 				tty_hangup(acm->tty);
 			}
+
+			spin_lock_irq(&acm->modem_lock);
+			if ((acm->ctrlin & ACM_CTRL_DCD) != (newctrl & ACM_CTRL_DCD))
+				acm->icount.dcd++;
+			if ((acm->ctrlin & ACM_CTRL_DSR) != (newctrl & ACM_CTRL_DSR))
+				acm->icount.dsr++;
+			if ((acm->ctrlin & ACM_CTRL_RI) != (newctrl & ACM_CTRL_RI))
+				acm->icount.rng++;
+			spin_unlock_irq(&acm->modem_lock);
+			wake_up_interruptible(&acm->modem_wait);
 
 			acm->ctrlin = newctrl;
 
@@ -801,13 +730,15 @@ static void acm_waker(struct work_struct *waker)
 	struct acm_wb *wb;
 	unsigned long flags;
 
+	mutex_lock(&open_mutex);
+
 	if (!acm || !acm->dev)
-		return;
+		goto done;
 
 	rv = usb_autopm_get_interface(acm->control);
 	if (rv < 0) {
 		printk("Autopm failure in %s (rv=%d)\n", __func__, rv);
-		return;
+		goto done;
 	}
 	spin_lock_irqsave(&acm->write_lock, flags);
 	while (!list_empty(&acm->delayed_wb_list)) {
@@ -820,6 +751,9 @@ static void acm_waker(struct work_struct *waker)
 	}
 	spin_unlock_irqrestore(&acm->write_lock, flags);
 	usb_autopm_put_interface(acm->control);
+
+done:
+	mutex_unlock(&open_mutex);
 }
 
 /*
@@ -831,6 +765,7 @@ static int acm_tty_open(struct tty_struct *tty, struct file *filp)
 	struct acm *acm;
 	int rv = -EINVAL;
 	int i;
+	int rc;
 	dbg("Entering acm_tty_open.");
 
 	mutex_lock(&open_mutex);
@@ -841,8 +776,6 @@ static int acm_tty_open(struct tty_struct *tty, struct file *filp)
 	else
 		rv = 0;
 
-	dev_info(&acm->data->dev, "%s: passthru_mode=%d\n", __func__, acm->passthru_mode);
-
 	set_bit(TTY_NO_WRITE_SPLIT, &tty->flags);
 	tty->driver_data = acm;
 	acm->tty = tty;
@@ -851,9 +784,10 @@ static int acm_tty_open(struct tty_struct *tty, struct file *filp)
 	   otherwise it is scheduled, and with high data rates data can get lost. */
 	tty->low_latency = 1;
 
-	if (usb_autopm_get_interface(acm->control) < 0)
+	if (usb_autopm_get_interface(acm->control) < 0) {
+		printk("%s: usb_autopm_get_interface failed\n", __func__);
 		goto early_bail;
-	else
+	} else
 		acm->control->needs_remote_wakeup = 1;
 
 	mutex_lock(&acm->mutex);
@@ -864,16 +798,18 @@ static int acm_tty_open(struct tty_struct *tty, struct file *filp)
 
 	if (acm->ctrlurb) {
 		acm->ctrlurb->dev = acm->dev;
-		if (usb_submit_urb(acm->ctrlurb, GFP_KERNEL)) {
-			dbg("usb_submit_urb(ctrl irq) failed");
+		if ((rc = usb_submit_urb(acm->ctrlurb, GFP_KERNEL))) {
+			printk("%s: usb_submit_urb(ctrl irq) failed (rc=%d)\n",
+			       __func__, rc);
 			goto bail_out;
 		}
 	}
 
-	if (!acm->passthru_mode &&
-	    0 > acm_set_control(acm, acm->ctrlout = ACM_CTRL_DTR | ACM_CTRL_RTS) &&
-	    (acm->ctrl_caps & USB_CDC_CAP_LINE))
-			goto full_bailout;
+	if (0 > (rc = acm_set_control(acm, acm->ctrlout = ACM_CTRL_DTR | ACM_CTRL_RTS)) &&
+	    (acm->ctrl_caps & USB_CDC_CAP_LINE)) {
+		printk("%s: acm_set_control failed (rc=%d)\n", __func__, rc);
+		goto full_bailout;
+	}
 	usb_autopm_put_interface(acm->control);
 
 	INIT_LIST_HEAD(&acm->spare_read_urbs);
@@ -884,12 +820,6 @@ static int acm_tty_open(struct tty_struct *tty, struct file *filp)
 	}
 	for (i = 0; i < acm->rx_buflimit; i++) {
 		list_add(&(acm->rb[i].list), &acm->spare_read_bufs);
-	}
-
-	INIT_LIST_HEAD(&acm->spare_notif_entries);
-	INIT_LIST_HEAD(&acm->filled_notif_entries);
-	for (i = 0; i < ACM_NN; i++) {
-		list_add(&(acm->ne[i].list), &acm->spare_notif_entries);
 	}
 
 	INIT_LIST_HEAD(&acm->delayed_wb_list);
@@ -971,8 +901,7 @@ static void acm_tty_close(struct tty_struct *tty, struct file *filp)
 #ifdef  PALM_FLOWMSG_SUPPORT
 			//acm_palm_flowmsg(acm, 0); // flow off
 #endif
-			if (!acm->passthru_mode)
-				acm_set_control(acm, acm->ctrlout = 0);
+			acm_set_control(acm, acm->ctrlout = 0);
 
 			/* try letting the last writes drain naturally */
 			wait_event_interruptible_timeout(acm->drain_wait,
@@ -1083,18 +1012,24 @@ static void /* int */ acm_tty_break_ctl(struct tty_struct *tty, int state)
 {
 	struct acm *acm = tty->driver_data;
 	int rv;
+
+	mutex_lock(&open_mutex);
+
 	if (!ACM_READY(acm))
-		return /* -EINVAL */;
+		goto done /* -EINVAL */;
+
 	rv = usb_autopm_get_interface(acm->control);
 	if (rv < 0) {
 		printk("Autopm failure in %s (rv=%d)\n", __func__, rv);
-		return;
+		goto done;
 	}
 	rv = acm_send_break(acm, state ? 0xffff : 0);
 	if (rv < 0)
 		dbg("send break failed");
 	usb_autopm_put_interface(acm->control);
 	/* return retval; */
+done:
+	mutex_unlock(&open_mutex);
 }
 
 static int acm_tty_tiocmget(struct tty_struct *tty, struct file *file)
@@ -1119,8 +1054,12 @@ static int acm_tty_tiocmset(struct tty_struct *tty, struct file *file,
 	unsigned int newctrl;
 	int rv;
 
-	if (!ACM_READY(acm))
-		return -EINVAL;
+	mutex_lock(&open_mutex);
+
+	if (!ACM_READY(acm)) {
+		rv = -EINVAL;
+		goto done;
+	}
 
 	newctrl = acm->ctrlout;
 	set = (set & TIOCM_DTR ? ACM_CTRL_DTR : 0) | (set & TIOCM_RTS ? ACM_CTRL_RTS : 0);
@@ -1128,57 +1067,62 @@ static int acm_tty_tiocmset(struct tty_struct *tty, struct file *file,
 
 	newctrl = (newctrl & ~clear) | set;
 
-	if (acm->ctrlout == newctrl)
-		return 0;
+	if (acm->ctrlout == newctrl) {
+		rv = 0;
+		goto done;
+	}
 
 	rv = usb_autopm_get_interface(acm->control);
 	if (rv < 0) {
 		printk("Autopm failure in %s (rv=%d)\n", __func__, rv);
-		return rv;
+		goto done;
 	}
 	rv = acm_set_control(acm, acm->ctrlout = newctrl);
 	usb_autopm_put_interface(acm->control);
+
+done:
+	mutex_unlock(&open_mutex);
 	return rv;
 }
 
-static int acm_ioc_send_ctrl_request(struct acm *acm, struct pioc_cdc_control_request __user *u_req)
-{
-	int retval;
-	struct pioc_cdc_control_request req;
-
-	if (copy_from_user(&req, u_req, sizeof(req)))
-		return -EFAULT;
-
-	retval = usb_control_msg(acm->dev, usb_sndctrlpipe(acm->dev, 0),
-				 req.bRequest, USB_RT_ACM, req.wValue,
-				 acm->control->altsetting[0].desc.bInterfaceNumber,
-				 req.data, req.wLength, 5000);
-	dev_info(&acm->data->dev, "rq: 0x%02x val: %#x idx: %d len: %#x result: %d\n",
-		 req.bRequest, req.wValue, 
-		 acm->control->altsetting[0].desc.bInterfaceNumber,
-		 req.wLength, retval);
-
-	return retval < 0 ? retval : 0;
-}
-
-static int acm_ioc_recv_notification(struct acm *acm, struct pioc_cdc_notification __user *u_notif)
+static int acm_wait_modem_status(struct acm *acm)
 {
 	DECLARE_WAITQUEUE(wait, current);
-	int ret = 0;
-	unsigned long flags;
-	struct acm_ne *notif_entry;
+	struct async_icount cprev, cnow;
+	int ret;
 
-	add_wait_queue(&acm->notif_wait, &wait);
+	spin_lock_irq(&acm->modem_lock);
+	memcpy(&cprev, &acm->last_icount, sizeof(struct async_icount));
+	memcpy(&cnow, &acm->icount, sizeof(struct async_icount));
+	spin_unlock_irq(&acm->modem_lock);
+
+	if ((cnow.rng != cprev.rng) ||
+	    (cnow.dsr != cprev.dsr) ||
+	    (cnow.dcd != cprev.dcd) ||
+	    (cnow.cts != cprev.cts)) {
+		/* changed since TIOCGICOUNT was called */
+		ret = 0;
+		return ret;
+	}
+
+	cprev = cnow;
+
+	add_wait_queue(&acm->modem_wait, &wait);
 
 	for (;;) {
+		spin_lock_irq(&acm->modem_lock);
+		memcpy(&cnow, &acm->icount, sizeof(struct async_icount));
+		spin_unlock_irq(&acm->modem_lock);
+
 		set_current_state(TASK_INTERRUPTIBLE);
 
-		spin_lock_irqsave(&acm->notif_lock, flags);
-		if (!list_empty(&acm->filled_notif_entries)) {
-			spin_unlock_irqrestore(&acm->notif_lock, flags);
+		if ((cnow.rng != cprev.rng) ||
+		    (cnow.dsr != cprev.dsr) ||
+		    (cnow.dcd != cprev.dcd) ||
+		    (cnow.cts != cprev.cts)) {
+			ret = 0;
 			break;
 		}
-		spin_unlock_irqrestore(&acm->notif_lock, flags);
 
 		schedule();
 
@@ -1192,35 +1136,39 @@ static int acm_ioc_recv_notification(struct acm *acm, struct pioc_cdc_notificati
 			ret = -EINTR;
 			break;
 		}
+
+		cprev = cnow;
 	}
 
 	current->state = TASK_RUNNING;
-	remove_wait_queue(&acm->notif_wait, &wait);
-
-	if (ret < 0)
-		return ret;
-
-	spin_lock_irqsave(&acm->notif_lock, flags);
-	notif_entry = list_entry(acm->filled_notif_entries.next, struct acm_ne, list);
-	list_del(&notif_entry->list);
-	spin_unlock_irqrestore(&acm->notif_lock, flags);
-
-/*
-	dev_info(&acm->data->dev,
-		 "%s: notification %#x copied: index %d len %d data0=%#x data1=%#x\n",
-		 __func__, notif_entry->notification.bNotificationType,
-		 notif_entry->notification.wIndex, notif_entry->notification.wLength,
-		 notif_entry->notification.data[0], notif_entry->notification.data[1]);
-*/
-	ret = copy_to_user(u_notif, &notif_entry->notification, sizeof(*u_notif));
-	if (ret < 0)
-		ret = -EFAULT; /* fall through */
-
-	spin_lock_irqsave(&acm->notif_lock, flags);
-	list_add_tail(&notif_entry->list, &acm->spare_notif_entries);
-	spin_unlock_irqrestore(&acm->notif_lock, flags);
+	remove_wait_queue(&acm->modem_wait, &wait);
 
 	return ret;
+}
+
+static int acm_get_count(struct acm *acm, struct serial_icounter_struct __user *icnt)
+{
+	struct serial_icounter_struct icount;
+	struct async_icount cnow;
+
+	spin_lock_irq(&acm->modem_lock);
+	memcpy(&cnow, &acm->icount, sizeof(struct async_icount));
+	memcpy(&acm->last_icount, &acm->icount, sizeof(struct async_icount));
+	spin_unlock_irq(&acm->modem_lock);
+
+	icount.cts         = cnow.cts;
+	icount.dsr         = cnow.dsr;
+	icount.rng         = cnow.rng;
+	icount.dcd         = cnow.dcd;
+	icount.rx          = cnow.rx;
+	icount.tx          = cnow.tx;
+	icount.frame       = cnow.frame;
+	icount.overrun     = cnow.overrun;
+	icount.parity      = cnow.parity;
+	icount.brk         = cnow.brk;
+	icount.buf_overrun = cnow.buf_overrun;
+
+	return copy_to_user(icnt, &icount, sizeof(icount)) ? -EFAULT : 0;
 }
 
 static int acm_tty_ioctl(struct tty_struct *tty, struct file *file, unsigned int cmd, unsigned long arg)
@@ -1232,10 +1180,11 @@ static int acm_tty_ioctl(struct tty_struct *tty, struct file *file, unsigned int
 		return -EINVAL;
 
 	switch (cmd) {
-	case PIOCSENDCTLREQ:
-		return acm_ioc_send_ctrl_request(acm, uarg);
-	case PIOCRECVNOTIF:
-		return acm_ioc_recv_notification(acm, uarg);
+	case TIOCMIWAIT:
+		return acm_wait_modem_status(acm);
+
+	case TIOCGICOUNT:
+		return acm_get_count(acm, uarg);
 	}
 	return -ENOIOCTLCMD;
 }
@@ -1260,8 +1209,10 @@ static void acm_tty_set_termios(struct tty_struct *tty, struct ktermios *termios
 	int newctrl = acm->ctrlout;
 	int rv;
 
+	mutex_lock(&open_mutex);
+
 	if (!ACM_READY(acm))
-		return;
+		goto done;
 
 	newline.dwDTERate = cpu_to_le32p(acm_tty_speed +
 		(termios->c_cflag & CBAUD & ~CBAUDEX) + (termios->c_cflag & CBAUDEX ? 15 : 0));
@@ -1280,7 +1231,7 @@ static void acm_tty_set_termios(struct tty_struct *tty, struct ktermios *termios
 	rv = usb_autopm_get_interface(acm->control);
 	if (rv < 0) {
 		printk("Autopm failure in %s (rv=%d)\n", __func__, rv);
-		return;
+		goto done;
 	}
 
 	if (newctrl != acm->ctrlout) {
@@ -1296,6 +1247,9 @@ static void acm_tty_set_termios(struct tty_struct *tty, struct ktermios *termios
 	}
 
 	usb_autopm_put_interface(acm->control);
+
+done:
+	mutex_unlock(&open_mutex);
 }
 
 /*
@@ -1614,8 +1568,8 @@ skip_no_separate_data:
 	mutex_init(&acm->mutex);
 	acm->rx_endpoint = usb_rcvbulkpipe(usb_dev, epread->bEndpointAddress);
 
-	spin_lock_init(&acm->notif_lock);
-	init_waitqueue_head(&acm->notif_wait);
+	spin_lock_init(&acm->modem_lock);
+	init_waitqueue_head(&acm->modem_wait);
 
 	acm->notification_mode = notification_mode;
 	acm->notification_ifnum = notification_ifnum;
@@ -1684,12 +1638,9 @@ skip_no_separate_data:
 	i = device_create_file(&intf->dev, &dev_attr_bmCapabilities);
 	if (i < 0)
 		goto alloc_fail8;
-	i = device_create_file(&intf->dev, &dev_attr_passthru);
-	if (i < 0)
-		goto alloc_fail9;
 	i = device_create_file(&intf->dev, &dev_attr_wbs);
 	if (i < 0)
-		goto alloc_fail10;
+		goto alloc_fail9;
 
 	if (cfd) { /* export the country data */
 		acm->country_codes = kmalloc(cfd->bLength - 4, GFP_KERNEL);
@@ -1746,8 +1697,6 @@ skip_countries:
 #endif
 
 	return 0;
-alloc_fail10:
-	device_remove_file(&acm->control->dev, &dev_attr_passthru);
 alloc_fail9:
 	device_remove_file(&acm->control->dev, &dev_attr_bmCapabilities);
 alloc_fail8:
@@ -1809,11 +1758,12 @@ static void acm_disconnect(struct usb_interface *intf)
 	if (!acm)
 		return;
 
+	mutex_lock(&open_mutex);
+
 #ifdef  CONFIG_PALM_QC_MODEM_HANDSHAKING_SUPPORT
 	modem_activity_set_usb_dev((unsigned long)0);
 #endif
 
-	mutex_lock(&open_mutex);
 	if (acm->country_codes){
 		device_remove_file(&acm->control->dev,
 				&dev_attr_wCountryCodes);
@@ -1821,7 +1771,6 @@ static void acm_disconnect(struct usb_interface *intf)
 				&dev_attr_iCountryCodeRelDate);
 	}
 	device_remove_file(&acm->control->dev, &dev_attr_bmCapabilities);
-	device_remove_file(&acm->control->dev, &dev_attr_passthru);
 	device_remove_file(&acm->control->dev, &dev_attr_wbs);
 	acm->dev = NULL;
 	usb_set_intfdata(acm->control, NULL);
@@ -1842,7 +1791,7 @@ static void acm_disconnect(struct usb_interface *intf)
 	if (acm->control != acm->data)
 		usb_driver_release_interface(&acm_driver, intf == acm->control ? acm->data : intf);
 
-	wake_up_interruptible(&acm->notif_wait);
+	wake_up_interruptible(&acm->modem_wait);
 
 	acm_tty_unregister_device(acm);
 	if (!acm->used) {

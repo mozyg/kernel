@@ -114,19 +114,8 @@ static int mmc_decode_cid(struct mmc_card *card)
 static int mmc_decode_csd(struct mmc_card *card)
 {
 	struct mmc_csd *csd = &card->csd;
-	unsigned int e, m, csd_struct;
+	unsigned int e, m;
 	u32 *resp = card->raw_csd;
-
-	/*
-	 * We only understand CSD structure v1.1 and v1.2.
-	 * v1.2 has extra information in bits 15, 11 and 10.
-	 */
-	csd_struct = UNSTUFF_BITS(resp, 126, 2);
-	if (csd_struct != 1 && csd_struct != 2) {
-		printk(KERN_ERR "%s: unrecognised CSD structure version %d\n",
-			mmc_hostname(card->host), csd_struct);
-		return -EINVAL;
-	}
 
 	csd->mmca_vsn	 = UNSTUFF_BITS(resp, 122, 4);
 	m = UNSTUFF_BITS(resp, 115, 4);
@@ -210,14 +199,6 @@ static int mmc_read_ext_csd(struct mmc_card *card)
 
 	ext_csd_struct = ext_csd[EXT_CSD_REV];
 
-	if (ext_csd_struct > 3) {
-		printk(KERN_ERR "%s: unrecognised EXT_CSD structure "
-			"version %d\n", mmc_hostname(card->host),
-			ext_csd_struct);
-		err = -EINVAL;
-		goto out;
-	}
-
 	// HACK: Hynix MMC reports "1" in revision field, which causes
 	// the driver to ignore EXT_CSD sector count and use
 	// 1GB size instead. Ignoring the ext_csd_struct is a temporary
@@ -292,6 +273,12 @@ static int mmc_execute_switch(struct mmc_card *card, u8 set, u8 index, u8 value)
 
 	if (err)
 		goto err;
+
+	//Workaround for Sandisk cards issue - need 1 ms delay
+	//between CMD6 and the following commands
+	if ( card->cid.manfid == 0x02 ) {
+		mdelay(1);
+	}
 
 	//:TODO: Replace the magic numbers with defines
 	err = mmc_wait_not_busy(card, 30 , 5);

@@ -372,6 +372,9 @@ static int mmc_blk_issue_rq(struct mmc_queue *mq, struct request *req)
 				 * so make sure to check both the busy
 				 * indication and the card state.
 				 */
+				 if( cmd.resp[0] & 0xffff0000 ) {
+				 	panic( "MMC write failed 0x%08x\n", cmd.resp[0] );
+				 }
 			} while (!(cmd.resp[0] & R1_READY_FOR_DATA) ||
 				(R1_CURRENT_STATE(cmd.resp[0]) == 7));
 

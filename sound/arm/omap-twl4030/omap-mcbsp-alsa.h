@@ -33,6 +33,7 @@ struct omap_alsa_codec_ops {
 	int (*configure)(unsigned int sample_rate, unsigned int data_width,
 			unsigned int channels);
 	int (*enable)(bool);
+	int (*capture_enable)(void);
 	int (*suspend)(void);
 	int (*resume)(void);
 	int (*mute)(bool);

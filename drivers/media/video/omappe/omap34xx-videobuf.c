@@ -20,42 +20,229 @@
 #define SPEW(level, args...)						\
 	do {								\
 		if ((level) <= SPEW_LEVEL)				\
-			printk(KERN_DEBUG "omap34xx-videobuf:\t" args);	\
+			printk(KERN_DEBUG "omap34xx-videobuf: " args);	\
 	} while (0)
 
-static void * omap34xx_videobuf_alloc(size_t size)
+static void * omap34xx_videobuf_alloc(size_t msize)
 {
-	return (kzalloc(size, GFP_KERNEL));
+	size_t size = msize + sizeof(struct omap34xx_videobuf);
+	struct videobuf_buffer *buf;
+
+	if (!(buf = kzalloc(size, GFP_KERNEL)))
+		goto exit;
+
+	buf->priv = (void *)buf + msize;
+exit:
+	return (buf);
 }
 
-static int omap34xx_videobuf_iolock(struct videobuf_queue* q,
-					struct videobuf_buffer *buf,
-					struct v4l2_framebuffer *not_used)
+static inline struct omap34xx_videobuf * __priv(struct videobuf_buffer *buf)
+{
+	return (buf->priv);
+}
+
+static int omap34xx_videobuf_sync(struct videobuf_queue *q,
+					struct videobuf_buffer *buf)
+{
+	if (__priv(buf)->sync)
+		__priv(buf)->sync(buf);
+
+	return (0);
+}
+
+static void omap34xx_videobuf_sync_single(struct videobuf_buffer *buf)
+{
+	dma_sync_single_for_cpu(NULL, __priv(buf)->dev_addr, buf->bsize,
+				DMA_FROM_DEVICE);
+}
+
+static void omap34xx_videobuf_sync_sg(struct videobuf_buffer *buf)
+{
+	dma_sync_sg_for_cpu(NULL, __priv(buf)->sg_list,
+				__priv(buf)->nr_pages, DMA_FROM_DEVICE);
+}
+
+static const char * omap34xx_videobuf_spew_sync(omap34xx_videobuf_sync_t sync)
+{
+	const char *str;
+
+	if (sync == omap34xx_videobuf_sync_single)
+		str = "single";
+
+	else if (sync == omap34xx_videobuf_sync_sg)
+		str = "sg";
+
+	else
+		str = "none";
+
+	return (str);
+}
+
+static int omap34xx_videobuf_init_mmap(struct videobuf_queue *q,
+					struct videobuf_buffer *buf)
 {
 	int rc;
+	struct omap34xx_dma_pool *pool = q->dev;
 
-	if (!videobuf_to_block(buf)) {
+	if (!buf->map) {
 		rc = -EINVAL;
 		goto exit;
 	}
+
+	__priv(buf)->dev_addr = __priv(buf)->block->dev_addr;
+	__priv(buf)->sync = pool->sync;
 
 	rc = 0;
 exit:
 	return (rc);
 }
 
-static int omap34xx_videobuf_sync(struct videobuf_queue *q,
-					struct videobuf_buffer *buf)
+static int omap34xx_videobuf_init_userptr(struct videobuf_queue *q,
+						struct videobuf_buffer *buf)
 {
-	struct omap34xx_dma_pool *pool = q->dev;
-	struct omap34xx_dma_block *block = videobuf_to_block(buf);
+	int i;
+	int rc;
+	int nr_pages;
+	struct page **pages;
+	struct scatterlist *sg_list;
+	struct vm_area_struct *vma;
 
-	/* TODO: select routine based on type or direction */
-	if (block && pool->sync)
-		pool->sync(block);
+	down_read(&current->mm->mmap_sem);
 
-	return (0);
+	if (buf->baddr != PAGE_ALIGN(buf->baddr)) {
+		rc = -EINVAL;
+		goto exit;
+	}
+	if (!(vma = find_vma(current->mm, buf->baddr))
+		|| (vma->vm_start > buf->baddr)
+		|| (vma->vm_end < (buf->baddr + buf->bsize))) {
+		rc = -EINVAL;
+		goto exit;
+	}
+
+	BUG_ON(__priv(buf)->pages);
+
+	nr_pages = buf->bsize >> PAGE_SHIFT;
+
+	if (!(pages = kcalloc(nr_pages, sizeof(*pages), GFP_KERNEL))) {
+		rc = -ENOMEM;
+		goto exit;
+	}
+
+	if (!(sg_list = kcalloc(nr_pages, sizeof(*sg_list), GFP_KERNEL))) {
+		rc = -ENOMEM;
+		goto kcalloc_sg_list_failed;
+	}
+
+	if ((rc = get_user_pages(current, current->mm, buf->baddr, nr_pages,
+					1, 0, pages, NULL)) < 0)
+		goto get_user_pages_failed;
+
+	if (rc < nr_pages) {
+		rc = -EFAULT;
+		goto get_user_pages_failed;
+	}
+
+	sg_init_table(sg_list, nr_pages);
+
+	for (i = 0; i < nr_pages; i++) {
+		sg_set_page(&sg_list[i], pages[i], PAGE_SIZE, 0);
+		sg_dma_address(&sg_list[i]) = page_to_dma(NULL, pages[i]);
+	}
+
+	__priv(buf)->nr_pages = nr_pages;
+	__priv(buf)->pages = pages;
+	__priv(buf)->sg_list = sg_list;
+
+	if (vma->vm_page_prot & L_PTE_CACHEABLE)
+		__priv(buf)->sync = omap34xx_videobuf_sync_sg;
+
+	rc = 0;
+	goto exit;
+
+get_user_pages_failed:
+	while (nr_pages--) {
+		if (pages[nr_pages])
+			put_page(pages[nr_pages]);
+	}
+
+	kfree(sg_list);
+
+kcalloc_sg_list_failed:
+	kfree(pages);
+exit:
+	up_read(&current->mm->mmap_sem);
+
+	return (rc);
 }
+
+int omap34xx_videobuf_init(struct videobuf_queue *q,
+				struct videobuf_buffer *buf)
+{
+	int rc;
+
+	switch (buf->memory) {
+	case V4L2_MEMORY_MMAP:
+		if ((rc = omap34xx_videobuf_init_mmap(q, buf)))
+			goto exit;
+
+		break;
+	case V4L2_MEMORY_USERPTR:
+		if ((rc = omap34xx_videobuf_init_userptr(q, buf)))
+			goto exit;
+
+		break;
+	case V4L2_MEMORY_OVERLAY:
+		rc = -EINVAL;
+		goto exit;
+	default:
+		BUG();
+	}
+
+	rc = 0;
+exit:
+	SPEW(1, "%s: rc=%d memory=%d baddr=0x%08lX bsize=%d dev_addr=0x%08X"
+		" nr_pages=%d sync=%s\n", __func__, rc, buf->memory,
+		buf->baddr, buf->bsize, __priv(buf)->dev_addr,
+		__priv(buf)->nr_pages,
+		omap34xx_videobuf_spew_sync(__priv(buf)->sync));
+
+	return (rc);
+}
+EXPORT_SYMBOL(omap34xx_videobuf_init);
+
+void omap34xx_videobuf_release(struct videobuf_queue *q,
+				struct videobuf_buffer *buf)
+{
+	int i;
+
+	switch (buf->memory) {
+	case V4L2_MEMORY_MMAP:
+		break;
+	case V4L2_MEMORY_USERPTR:
+		if (__priv(buf)->pages) {
+			for (i = 0; i < __priv(buf)->nr_pages; i++)
+				put_page(__priv(buf)->pages[i]);
+
+			kfree(__priv(buf)->pages);
+			kfree(__priv(buf)->sg_list);
+
+			__priv(buf)->nr_pages = 0;
+			__priv(buf)->pages = NULL;
+			__priv(buf)->sg_list = NULL;
+		}
+
+		break;
+	case V4L2_MEMORY_OVERLAY:
+		break;
+	default:
+		BUG();
+	}
+
+	__priv(buf)->dev_addr = 0;
+	__priv(buf)->sync = NULL;
+}
+EXPORT_SYMBOL(omap34xx_videobuf_release);
 
 #define SPEW_FREE_LIST(l, p)						\
 	do {								\
@@ -143,7 +330,7 @@ static int omap34xx_videobuf_mmap_free(struct videobuf_queue *q)
 {
 	int i;
 	int rc;
-	struct omap34xx_dma_pool *pool = q->dev;
+	struct omap34xx_dma_pool *pool;
 	struct omap34xx_dma_block *block;
 
 	for (i = 0; i < VIDEO_MAX_FRAME; i++) {
@@ -154,10 +341,10 @@ static int omap34xx_videobuf_mmap_free(struct videobuf_queue *q)
 	}
 
 	for (i = 0; i < VIDEO_MAX_FRAME; i++) {
-		if (q->bufs[i] && q->bufs[i]->priv) {
-			block = videobuf_to_block(q->bufs[i]);
-			q->bufs[i]->priv = NULL;
+		if (q->bufs[i] && (block = __priv(q->bufs[i])->block)) {
+			pool = q->dev;
 			omap34xx_dma_block_free(pool, block);
+			__priv(q->bufs[i])->block = NULL;
 		}
 	}
 
@@ -213,11 +400,9 @@ static int omap34xx_videobuf_mmap_mapper(struct videobuf_queue *q,
 	int i;
 	int rc;
 	struct videobuf_buffer *buf;
+	struct videobuf_mapping *map;
 	struct omap34xx_dma_pool *pool = q->dev;
 	struct omap34xx_dma_block *block;
-
-	SPEW(1, "%s: pgoff=%lu start=0x%08lX end=0x%08lX\n", __func__,
-		vma->vm_pgoff, vma->vm_start, vma->vm_end);
 
 	for (i = 0; i < VIDEO_MAX_FRAME; i++) {
 		if ((buf = q->bufs[i])
@@ -238,49 +423,55 @@ static int omap34xx_videobuf_mmap_mapper(struct videobuf_queue *q,
 		goto exit;
 	}
 
-	BUG_ON(buf->priv);
+	BUG_ON(__priv(buf)->block);
 
 	if (!(block = omap34xx_dma_block_alloc(pool, buf->bsize))) {
 		rc = -ENOMEM;
 		goto exit;
 	}
 
-	if ((rc = pool->mmap(block, vma)))
-		goto failed;
-
-	if (!(buf->map = kzalloc(sizeof(*buf->map), GFP_KERNEL))) {
+	if (!(map = kzalloc(sizeof(*map), GFP_KERNEL))) {
 		rc = -ENOMEM;
-		goto failed;
+		goto kzalloc_failed;
 	}
 
+	if ((rc = pool->mmap(block, vma)))
+		goto mmap_failed;
+
 	buf->baddr = vma->vm_start;
+	buf->map = map;
 	buf->map->count = 1;
 	buf->map->start = vma->vm_start;
 	buf->map->end = vma->vm_end;
 	buf->map->q = q;
-	buf->priv = block;
+	__priv(buf)->block = block;
 	vma->vm_ops = &omap34xx_videobuf_vm_ops;
 	vma->vm_flags |= VM_DONTEXPAND;
 	vma->vm_private_data = buf->map;
 
-	return (0);
+	rc = 0;
+	goto exit;
 
-failed:
+mmap_failed:
+	kfree(map);
+kzalloc_failed:
 	omap34xx_dma_block_free(pool, block);
 exit:
+	SPEW(1, "%s: rc=%d pgoff=%lu start=0x%08lX end=0x%08lX\n", __func__,
+		rc, vma->vm_pgoff, vma->vm_start, vma->vm_end);
+
 	return (rc);
 }
 
-struct omap34xx_dma_block * videobuf_to_block(struct videobuf_buffer *buf)
+struct omap34xx_videobuf * get_omap34xx_buf(struct videobuf_buffer *buf)
 {
-	return (buf->priv);
+	return (__priv(buf));
 }
-EXPORT_SYMBOL(videobuf_to_block);
+EXPORT_SYMBOL(get_omap34xx_buf);
 
 static struct videobuf_qtype_ops omap34xx_videobuf_ops = {
 	.magic = MAGIC_QTYPE_OPS,
 	.alloc = omap34xx_videobuf_alloc,
-	.iolock = omap34xx_videobuf_iolock,
 	.sync = omap34xx_videobuf_sync,
 	.mmap_free = omap34xx_videobuf_mmap_free,
 	.mmap_mapper = omap34xx_videobuf_mmap_mapper,
@@ -316,12 +507,6 @@ static int omap34xx_dma_block_mmap(struct omap34xx_dma_block *block,
 	return (rc);
 }
 
-static void omap34xx_dma_block_sync(struct omap34xx_dma_block *block)
-{
-	dma_sync_single_for_cpu(NULL, block->dev_addr, block->size,
-				DMA_FROM_DEVICE);
-}
-
 static void omap34xx_dma_pool_deinit(struct omap34xx_dma_pool *pool)
 {
 	struct list_head *item;
@@ -340,7 +525,7 @@ void omap34xx_dma_pool_destroy(struct omap34xx_dma_pool *pool)
 	size_t off;
 
 	for (off = 0; off < pool->size; off += PAGE_SIZE)
-		free_page(pool->cpu_addr + off);
+		free_page((unsigned long)(pool->cpu_addr + off));
 
 	omap34xx_dma_pool_deinit(pool);
 }
@@ -350,7 +535,7 @@ static int omap34xx_dma_pool_init(struct omap34xx_dma_pool *pool,
 					unsigned int size, void *cpu_addr,
 					dma_addr_t dev_addr,
 					omap34xx_dma_block_mmap_t mmap,
-					omap34xx_dma_block_sync_t sync)
+					omap34xx_videobuf_sync_t sync)
 {
 	int rc;
 	struct omap34xx_dma_block *block;
@@ -401,8 +586,8 @@ int omap34xx_dma_pool_create(struct omap34xx_dma_pool *pool, unsigned int size)
 	split_page(virt_to_page(cpu_addr), order);
 
 	if ((rc = omap34xx_dma_pool_init(pool, size, cpu_addr, dev_addr,
-						omap34xx_dma_block_mmap,
-						omap34xx_dma_block_sync))) {
+					omap34xx_dma_block_mmap,
+					omap34xx_videobuf_sync_single))) {
 		omap34xx_dma_pool_destroy(pool);
 		goto exit;
 	}
