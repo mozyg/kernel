@@ -19,6 +19,11 @@ obj-$(CONFIG_USB_FSL_USB2)	+= fsl_usb2_udc.o
 obj-$(CONFIG_USB_M66592)	+= m66592-udc.o
 
 #
+# USB gadget events
+#
+obj-$(CONFIG_USB_GADGET_EVENT)	+= gadget_event.o
+
+#
 # USB gadget drivers
 #
 g_zero-objs			:= zero.o usbstring.o config.o epautoconf.o
@@ -40,3 +45,4 @@ obj-$(CONFIG_USB_FILE_STORAGE)	+= g_file_storage.o
 obj-$(CONFIG_USB_G_SERIAL)	+= g_serial.o
 obj-$(CONFIG_USB_MIDI_GADGET)	+= g_midi.o
 
+obj-$(CONFIG_USB_COMPOSITE)	+= composite/

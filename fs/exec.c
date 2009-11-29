@@ -1400,7 +1400,7 @@ EXPORT_SYMBOL(set_binfmt);
  * name into corename, which must have space for at least
  * CORENAME_MAX_SIZE bytes plus one byte for the zero terminator.
  */
-static int format_corename(char *corename, const char *pattern, long signr)
+int format_corename(char *corename, const char *pattern, long signr)
 {
 	const char *pat_ptr = pattern;
 	char *out_ptr = corename;
@@ -1434,6 +1434,14 @@ static int format_corename(char *corename, const char *pattern, long signr)
 				pid_in_pattern = 1;
 				rc = snprintf(out_ptr, out_end - out_ptr,
 					      "%d", task_tgid_vnr(current));
+				if (rc > out_end - out_ptr)
+					goto out;
+				out_ptr += rc;
+				break;
+			/* "thread id" pid */
+			case 'q':
+				rc =  snprintf(out_ptr, out_end - out_ptr,
+					      "%d", current->pid);
 				if (rc > out_end - out_ptr)
 					goto out;
 				out_ptr += rc;

@@ -44,6 +44,10 @@
 #include <linux/fault-inject.h>
 #include <linux/page-isolation.h>
 
+#ifdef CONFIG_LOW_MEMORY_NOTIFY
+#include <linux/lowmemnotify.h>
+#endif
+
 #include <asm/tlbflush.h>
 #include <asm/div64.h>
 #include "internal.h"
@@ -1468,6 +1472,10 @@ __alloc_pages(gfp_t gfp_mask, unsigned int order,
 
 	if (should_fail_alloc_page(gfp_mask, order))
 		return NULL;
+
+#ifdef CONFIG_LOW_MEMORY_NOTIFY
+	memnotify_threshold();
+#endif
 
 restart:
 	z = zonelist->zones;  /* the list of zones suitable for gfp_mask */

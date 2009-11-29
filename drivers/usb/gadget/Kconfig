@@ -253,10 +253,20 @@ config USB_LH7A40X
 	default USB_GADGET
 	select USB_GADGET_SELECTED
 
+# built in ../musb along with host support
+config USB_GADGET_MUSB_HDRC
+	boolean "Inventra HDRC USB Peripheral (TI, ...)"
+	depends on USB_MUSB_HDRC && (USB_MUSB_PERIPHERAL || USB_MUSB_OTG)
+	select USB_GADGET_DUALSPEED
+	select USB_GADGET_SELECTED
+	help
+	  This OTG-capable silicon IP is used in dual designs including
+	  the TI DaVinci, OMAP 243x, OMAP 343x, and TUSB 6010.
+
 config USB_GADGET_OMAP
 	boolean "OMAP USB Device Controller"
 	depends on ARCH_OMAP
-	select ISP1301_OMAP if MACH_OMAP_H2 || MACH_OMAP_H3
+	select ISP1301_OMAP if MACH_OMAP_H2 || MACH_OMAP_H3 || MACH_OMAP_H4_OTG
 	help
 	   Many Texas Instruments OMAP processors have flexible full
 	   speed USB device controllers, with support for up to 30
@@ -357,6 +367,12 @@ config USB_DUMMY_HCD
 # first and will be selected by default.
 
 endchoice
+
+config USB_GADGET_EVENT
+	boolean "Gadget Event support"
+	depends on USB_GADGET && TWL4030_USB
+	help
+	  This driver is for sending the USB gadget events
 
 config USB_GADGET_DUALSPEED
 	bool
@@ -538,6 +554,18 @@ config USB_MIDI_GADGET
 	  Say "y" to link the driver statically, or "m" to build a
 	  dynamically linked module called "g_midi".
 
+config USB_COMPOSITE
+	tristate "USB COMPOSITE GADGET support"
+	select USB_ETH_RNDIS
+	help
+	  This enables support for the composite gadget driver.
+
+config USB_FILE_STORAGE_MEDIASYNC
+	boolean "Media Sync support"
+	depends on USB_COMPOSITE
+	default y
+	help
+	  This enables support for Media Sync mode.
 
 # put drivers that need isochronous transfer support (for audio
 # or video class gadget drivers), or specific hardware, here.

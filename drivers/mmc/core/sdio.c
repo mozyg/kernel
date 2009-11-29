@@ -5,8 +5,8 @@
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or (at
- * your option) any later version.
+ * the Free Software Foundation; version 2 of the License.
+ *
  */
 
 #include <linux/err.h>
@@ -245,12 +245,14 @@ int mmc_attach_sdio(struct mmc_host *host, u32 ocr)
 		ocr &= ~0x7F;
 	}
 
+#ifndef CONFIG_SDIO_FORCE_OPCOND_1_8V
 	if (ocr & MMC_VDD_165_195) {
 		printk(KERN_WARNING "%s: SDIO card claims to support the "
 		       "incompletely defined 'low voltage range'. This "
 		       "will be ignored.\n", mmc_hostname(host));
 		ocr &= ~MMC_VDD_165_195;
 	}
+#endif
 
 	host->ocr = mmc_select_voltage(host, ocr);
 

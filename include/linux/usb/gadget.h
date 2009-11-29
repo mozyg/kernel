@@ -90,6 +90,13 @@ struct usb_request {
 
 	int			status;
 	unsigned		actual;
+
+#ifdef CONFIG_USB_GADGET_REQUEST_DEBUG
+#define USB_GADGET_REQUEST_MAGIC	0x5a5a5a5a
+
+	unsigned		magic;
+	unsigned		queued;
+#endif
 };
 
 /*-------------------------------------------------------------------------*/
@@ -109,6 +116,13 @@ struct usb_ep_ops {
 	struct usb_request *(*alloc_request) (struct usb_ep *ep,
 		gfp_t gfp_flags);
 	void (*free_request) (struct usb_ep *ep, struct usb_request *req);
+
+	void *(*alloc_buffer) (struct usb_ep *ep, unsigned bytes,
+		dma_addr_t *dma, gfp_t gfp_flags);
+	void (*free_buffer) (struct usb_ep *ep, void *buf, dma_addr_t dma,
+		unsigned bytes);
+	// NOTE:  on 2.6, drivers may also use dma_map() and
+	// dma_sync_single_*() to directly manage dma overhead. 
 
 	int (*queue) (struct usb_ep *ep, struct usb_request *req,
 		gfp_t gfp_flags);
@@ -225,6 +239,47 @@ static inline void
 usb_ep_free_request (struct usb_ep *ep, struct usb_request *req)
 {
 	ep->ops->free_request (ep, req);
+}
+
+/**
+ * usb_ep_alloc_buffer - allocate an I/O buffer
+ * @ep:the endpoint associated with the buffer
+ * @len:length of the desired buffer
+ * @dma:pointer to the buffer's DMA address; must be valid
+ * @gfp_flags:GFP_* flags to use
+ *
+ * Returns a new buffer, or null if one could not be allocated.
+ * The buffer is suitably aligned for dma, if that endpoint uses DMA,
+ * and the caller won't have to care about dma-inconsistency
+ * or any hidden "bounce buffer" mechanism.  No additional per-request
+ * DMA mapping will be required for such buffers.
+ * Free it later with usb_ep_free_buffer().
+ *
+ * You don't need to use this call to allocate I/O buffers unless you
+ * want to make sure drivers don't incur costs for such "bounce buffer"
+ * copies or per-request DMA mappings.
+ */
+static inline void *
+usb_ep_alloc_buffer (struct usb_ep *ep, unsigned len, dma_addr_t *dma,
+	gfp_t gfp_flags)
+{
+	return ep->ops->alloc_buffer (ep, len, dma, gfp_flags);
+}
+
+/**
+ * usb_ep_free_buffer - frees an i/o buffer
+ * @ep:the endpoint associated with the buffer
+ * @buf:CPU view address of the buffer
+ * @dma:the buffer's DMA address
+ * @len:length of the buffer
+ *
+ * reverses the effect of usb_ep_alloc_buffer().
+ * caller guarantees the buffer will no longer be accessed
+ */
+static inline void
+usb_ep_free_buffer (struct usb_ep *ep, void *buf, dma_addr_t dma, unsigned len)
+{
+	ep->ops->free_buffer (ep, buf, dma, len);
 }
 
 /**
@@ -838,7 +893,7 @@ struct usb_gadget_strings {
 };
 
 /* put descriptor for string with that id into buf (buflen >= 256) */
-int usb_gadget_get_string (struct usb_gadget_strings *table, int id, u8 *buf);
+int usb_gadget_get_string(const struct usb_gadget_strings *table, int id, u8 *buf);
 
 /*-------------------------------------------------------------------------*/
 

@@ -807,6 +807,9 @@ struct file {
 	struct list_head	f_ep_links;
 	spinlock_t		f_ep_lock;
 #endif /* #ifdef CONFIG_EPOLL */
+#ifdef CONFIG_FORCED_UNMOUNT
+	int			f_light;
+#endif /* #ifdef CONFIG_FORCED_UNMOUNT */
 	struct address_space	*f_mapping;
 };
 extern spinlock_t files_lock;
@@ -2095,6 +2098,8 @@ struct ctl_table;
 int proc_nr_files(struct ctl_table *table, int write, struct file *filp,
 		  void __user *buffer, size_t *lenp, loff_t *ppos);
 
+
+void quiesce_filesystem(struct vfsmount *mnt);
 
 #endif /* __KERNEL__ */
 #endif /* _LINUX_FS_H */

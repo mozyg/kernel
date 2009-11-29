@@ -209,7 +209,8 @@ static int mmc_read_ext_csd(struct mmc_card *card)
 	}
 
 	ext_csd_struct = ext_csd[EXT_CSD_REV];
-	if (ext_csd_struct > 2) {
+
+	if (ext_csd_struct > 3) {
 		printk(KERN_ERR "%s: unrecognised EXT_CSD structure "
 			"version %d\n", mmc_hostname(card->host),
 			ext_csd_struct);
@@ -217,7 +218,12 @@ static int mmc_read_ext_csd(struct mmc_card *card)
 		goto out;
 	}
 
-	if (ext_csd_struct >= 2) {
+	// HACK: Hynix MMC reports "1" in revision field, which causes
+	// the driver to ignore EXT_CSD sector count and use
+	// 1GB size instead. Ignoring the ext_csd_struct is a temporary
+	// solution until we figure out the correct one / fix the Hynix part.
+	if (ext_csd_struct >= 2 ||
+		card->cid.manfid == 0x90) {
 		card->ext_csd.sectors =
 			ext_csd[EXT_CSD_SEC_CNT + 0] << 0 |
 			ext_csd[EXT_CSD_SEC_CNT + 1] << 8 |
@@ -315,6 +321,7 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 		}
 
 		card->type = MMC_TYPE_MMC;
+		host->mode = MMC_MODE_MMC;
 		card->rca = 1;
 		memcpy(card->raw_cid, cid, sizeof(card->raw_cid));
 	}
@@ -394,15 +401,29 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 	mmc_set_clock(host, max_dtr);
 
 	/*
+	 * HACK: some devices, Hynix flash in particular, seem
+	 * to need a little pause here or it wont respond to any
+	 * further commands.
+	 */
+//	msleep(10);
+	mdelay(10);
+
+	/*
 	 * Activate wide bus (if supported).
 	 */
 	if ((card->csd.mmca_vsn >= CSD_SPEC_VER_4) &&
+		(host->caps & MMC_CAP_8_BIT_DATA)) {
+		err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL,
+			EXT_CSD_BUS_WIDTH, EXT_CSD_BUS_WIDTH_8);
+		if (err)
+			goto free_card;
+		mmc_set_bus_width(card->host, MMC_BUS_WIDTH_8);
+	} else if ((card->csd.mmca_vsn >= CSD_SPEC_VER_4) &&
 		(host->caps & MMC_CAP_4_BIT_DATA)) {
 		err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL,
 			EXT_CSD_BUS_WIDTH, EXT_CSD_BUS_WIDTH_4);
 		if (err)
 			goto free_card;
-
 		mmc_set_bus_width(card->host, MMC_BUS_WIDTH_4);
 	}
 
