@@ -1177,10 +1177,14 @@ err_free_timer:
 }
 
 
-static inline void
+static inline int
 hsuart_rx_timer_ack  ( struct dev_ctxt * ctxt )
 {
+	if(!ctxt->rx_timer_running)
+		return -1;
+	
 	omap_dm_timer_write_status( ctxt->rx_timer, OMAP_TIMER_INT_OVERFLOW);
+	return 0;
 }
 
 
@@ -1615,9 +1619,9 @@ hsuart_alloc_rx_dma_chain ( struct dev_ctxt * ctxt )
 
 	ctxt->rx_ch_head = 0;
 	omap_get_dma_chain_channels ( ctxt->rx_dma_ch, ctxt->rx_ch );
-        
+	printk("hsuart%d: grap dma chain %d\n", ctxt->uart_no, ctxt->rx_dma_ch);
 
-        return 0;
+	return 0;
 }
 
 static void
@@ -1934,7 +1938,11 @@ hsuart_rx_timer_isr ( int irq, void *dev_id )
 
 	spin_lock_irqsave( &ctxt->lock, flags );
 
-	hsuart_rx_timer_ack ( ctxt );
+	if( hsuart_rx_timer_ack ( ctxt )) {
+		// is it spurious interrupt?
+		printk(KERN_ERR "%s: unexpected timer interrupt\n",__func__);
+		goto done;
+	}
 	log_txrx_event ( ctxt, TXRX_EVENT_RX_TIMER_IRQ, 0, 0 );
 
 	pos1 = hsuart_update_rxbuf_pos ( ctxt, ctxt->rx_q[ctxt->rx_q_head]);
@@ -1977,6 +1985,7 @@ hsuart_rx_timer_isr ( int irq, void *dev_id )
 		log_txrx_event( ctxt, TXRX_EVENT_RX_WAKE_USER, hsuart_rx_has_bytes ( ctxt ), 0 );
 		wake_up_interruptible ( &ctxt->rx_wait );
 	}
+done:
 	spin_unlock_irqrestore( &ctxt->lock, flags );
 
 	return IRQ_HANDLED;
