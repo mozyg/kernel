@@ -44,6 +44,8 @@ static time_t		oldtime;
 
 static int rtc_suspend(struct device *dev, pm_message_t mesg)
 {
+	int ret;
+	int retry;
 	struct rtc_device	*rtc = to_rtc_device(dev);
 	struct rtc_time		tm;
 	struct timespec		ts = current_kernel_time();
@@ -53,7 +55,12 @@ static int rtc_suspend(struct device *dev, pm_message_t mesg)
 				BUS_ID_SIZE) != 0)
 		return 0;
 
-	rtc_read_time(rtc, &tm);
+	retry = 5;
+	do {
+		ret = rtc_read_time(rtc, &tm);
+	} while (ret && retry--);
+	if (ret)
+		printk(KERN_ERR "%s: Could not read RTC in suspend.\n", __FILE__);
 	rtc_tm_to_time(&tm, &oldtime);
 
 	/* RTC precision is 1 second; adjust delta for avg 1/2 sec err */

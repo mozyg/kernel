@@ -1107,21 +1107,30 @@ static unsigned long shrink_zone(int priority, struct zone *zone,
 	unsigned long nr_inactive;
 	unsigned long nr_to_scan;
 	unsigned long nr_reclaimed = 0;
+	unsigned long tmp;
+	unsigned long zone_active;
+	unsigned long zone_inactive;
 
 	/*
 	 * Add one to `nr_to_scan' just to make sure that the kernel will
 	 * slowly sift through the active list.
 	 */
-	zone->nr_scan_active +=
-		(zone_page_state(zone, NR_ACTIVE) >> priority) + 1;
+	zone_active = zone_page_state(zone, NR_ACTIVE);
+	tmp = (zone_active >> priority) + 1;
+	if (unlikely(tmp > zone_active))
+		tmp = zone_active;
+	zone->nr_scan_active += tmp;
 	nr_active = zone->nr_scan_active;
 	if (nr_active >= sc->swap_cluster_max)
 		zone->nr_scan_active = 0;
 	else
 		nr_active = 0;
 
-	zone->nr_scan_inactive +=
-		(zone_page_state(zone, NR_INACTIVE) >> priority) + 1;
+	zone_inactive = zone_page_state(zone, NR_INACTIVE);
+	tmp = (zone_inactive >> priority) + 1;
+	if (unlikely(tmp > zone_inactive))
+		tmp = zone_inactive;
+	zone->nr_scan_inactive += tmp;
 	nr_inactive = zone->nr_scan_inactive;
 	if (nr_inactive >= sc->swap_cluster_max)
 		zone->nr_scan_inactive = 0;
