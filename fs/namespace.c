@@ -1298,7 +1298,7 @@ static int do_remount(struct nameidata *nd, int flags, int mnt_flags,
 
 	down_write(&sb->s_umount);
 	if (flags & MS_BIND)
-		err = change_mount_flags(nd->path.mnt, flags);
+		err = change_mount_flags(nd->mnt, flags);
 	else
 		err = do_remount_sb(sb, flags, data, 0);
 	if (!err)
